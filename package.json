@@ -1,0 +1,28 @@
+{
+  "name": "todo-reminder",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "把群通知变成准时触发的待办提醒。零依赖 Node，通过 QQ 对话管理。",
+  "keywords": [
+    "todo",
+    "reminder",
+    "qq",
+    "onebot",
+    "napcat",
+    "llm",
+    "zero-dependency"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.6"
+  },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node _test-parse.mjs && node _test-llm.mjs && node _test-qq.mjs && node _test-alarms.mjs && node _test-memory.mjs && node _test-at.mjs && node _test-ics.mjs && node _test-mail.mjs",
+    "test:parse": "node _test-parse.mjs",
+    "test:alarms": "node _test-alarms.mjs",
+    "test:memory": "node _test-memory.mjs",
+    "test:ics": "node _test-ics.mjs",
+    "test:mail": "node _test-mail.mjs"
+  }
+}

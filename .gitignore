@@ -1,0 +1,24 @@
+# ===== 个人数据，绝对不要提交 =====
+# data/ 里有你的待办、聊天记录、记忆，以及明文存放的 API Key 和邮箱授权码
+data/
+_test-data/
+*.log
+
+# ===== 一次性生成的临时文件 =====
+# 登录二维码页面与截图（含时效性登录凭证）
+_qr*.png
+_qr*.html
+_test-group-img.png
+
+# ===== 打包产物 =====
+*.tar.gz
+*.zip
+
+# ===== 依赖与系统文件 =====
+node_modules/
+.DS_Store
+Thumbs.db
+
+# ===== 本地覆盖配置 =====
+.env
+.env.local

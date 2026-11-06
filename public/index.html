@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>待办提醒</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root{
+    --bg:#f6f6f4; --panel:#fff; --line:#e3e2dd; --ink:#22221f; --muted:#6b6a64;
+    --accent:#185fa5; --accent-soft:#e6f1fb; --warn:#854f0b; --warn-soft:#faeeda;
+    --ok:#0f6e56; --ok-soft:#e1f5ee; --bad:#a32d2d; --bad-soft:#fcebeb;
+    --radius:10px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  header{display:flex;align-items:center;gap:16px;padding:10px 18px;background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:10}
+  header h1{font-size:15px;font-weight:500;margin:0}
+  .stats{display:flex;gap:14px;color:var(--muted);font-size:12.5px;flex:1;flex-wrap:wrap}
+  .stats b{color:var(--ink);font-weight:500}
+  main{display:grid;grid-template-columns:minmax(320px,1fr) minmax(320px,1fr) minmax(300px,.9fr);gap:14px;padding:14px 18px 40px;align-items:start}
+  @media(max-width:1100px){main{grid-template-columns:1fr}}
+  section{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:12px}
+  h2{font-size:13px;font-weight:500;margin:0 0 10px;color:var(--muted);display:flex;justify-content:space-between;align-items:center}
+  textarea{width:100%;min-height:150px;resize:vertical;border:1px solid var(--line);border-radius:8px;padding:10px;font:inherit;background:#fdfdfc;color:inherit}
+  textarea:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
+  .drop{border:1px dashed var(--line);border-radius:8px;padding:10px;text-align:center;color:var(--muted);font-size:12.5px;margin-top:8px}
+  .drop.over{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+  .row{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+  button{font:inherit;font-size:13px;padding:6px 12px;border-radius:8px;border:1px solid var(--line);background:#fff;color:var(--ink);cursor:pointer}
+  button:hover{border-color:#c8c7c0}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  button.primary:disabled{opacity:.45;cursor:default}
+  button.ghost{background:transparent;border-color:transparent;color:var(--muted);padding:4px 6px}
+  button.tiny{font-size:12px;padding:3px 8px}
+  .card{border:1px solid var(--line);border-radius:8px;padding:10px;margin-bottom:10px;background:#fdfdfc}
+  .card.fresh{background:var(--accent-soft);border-color:#b5d4f4}
+  .tag{display:inline-block;font-size:11.5px;padding:1px 7px;border-radius:20px;background:var(--accent-soft);color:var(--accent);margin-right:6px}
+  .tag.warn{background:var(--warn-soft);color:var(--warn)}
+  .tag.ok{background:var(--ok-soft);color:var(--ok)}
+  .tag.bad{background:var(--bad-soft);color:var(--bad)}
+  .tag.model{background:#ece9fb;color:#4b3fa8}
+  pre.raw{white-space:pre-wrap;word-break:break-all;font-size:12px;line-height:1.5;color:var(--muted);background:#fafaf8;border:1px solid var(--line);border-radius:6px;padding:8px;margin:6px 0 0;max-height:180px;overflow:auto}
+  details summary{font-size:12.5px;color:var(--muted);cursor:pointer;margin-top:6px}
+  .title{font-weight:500;margin:4px 0}
+  .kv{display:grid;grid-template-columns:64px 1fr;gap:2px 8px;font-size:13px;margin:6px 0}
+  .kv span:first-child{color:var(--muted)}
+  .rem{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12.5px;padding:4px 0;border-top:1px dashed var(--line)}
+  .rem:first-child{border-top:none}
+  .rem .when{color:var(--muted);white-space:nowrap}
+  .miss{color:var(--bad);font-size:12.5px}
+  .note{color:var(--warn);font-size:12.5px;margin:4px 0}
+  .muted{color:var(--muted);font-size:12.5px}
+  .empty{color:var(--muted);font-size:12.5px;padding:8px 0}
+  .bar{height:3px;background:var(--line);border-radius:3px;overflow:hidden;margin-top:6px}
+  .bar i{display:block;height:100%;background:var(--accent)}
+  .inp{width:100%;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font:inherit;font-size:12.5px;background:#fff;color:inherit}
+  dialog{border:1px solid var(--line);border-radius:12px;padding:16px;max-width:640px;width:92vw;color:inherit;background:var(--panel)}
+  dialog::backdrop{background:rgba(0,0,0,.28)}
+  dialog textarea{min-height:240px;font-family:ui-monospace,Consolas,monospace;font-size:12.5px}
+  .flexline{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  label{font-size:12.5px;color:var(--muted);display:block;margin:8px 0 3px}
+</style>
+</head>
+<body>
+<header>
+  <h1>待办提醒</h1>
+  <div class="stats">
+    <span>待发 <b id="s-pending">-</b> 条</span>
+    <span>任务 <b id="s-tasks">-</b> 条</span>
+    <span id="s-next">下一条：—</span>
+    <span id="s-rule"></span>
+  </div>
+  <button class="tiny" id="btn-test">测试通知</button>
+  <button class="tiny" id="btn-qq">QQ 小号</button>
+  <button class="tiny" id="btn-rules">规则</button>
+  <button class="tiny" id="btn-llm">模型</button>
+  <button class="tiny" id="btn-config">推送通道</button>
+</header>
+
+<main>
+  <section>
+    <h2>① 把通知丢进来 <span class="muted" id="ocr-tip"></span></h2>
+    <div class="muted" id="qq-hint" style="margin-bottom:8px"></div>
+    <textarea id="text" placeholder="把群通知粘在这里，或按 Ctrl+V 直接粘贴截图，或把图片拖到下面的框里。&#10;&#10;例：&#10;【高等数学】实验报告于11月10日23:59前提交到教学平台，逾期不候。"></textarea>
+    <div class="drop" id="drop">把截图拖到这里　·　或点这里选图片</div>
+    <input type="file" id="file" accept="image/*" hidden>
+    <div class="row">
+      <button class="primary" id="btn-parse">识别</button>
+      <button id="btn-clear">清空</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>② 看一眼认得对不对</h2>
+    <div id="preview"><div class="empty">左边贴点什么，这里会立刻显示结果。</div></div>
+  </section>
+
+  <section>
+    <h2>③ 台账 <button class="ghost tiny" id="btn-refresh">刷新</button></h2>
+    <div id="tasks"><div class="empty">还没有任务。</div></div>
+    <h2 style="margin-top:16px">最近提醒</h2>
+    <div id="inbox"><div class="empty">—</div></div>
+  </section>
+</main>
+
+<dialog id="dlg-rule">
+  <h2 style="font-size:14px;color:var(--ink)" id="rule-name">规则</h2>
+  <textarea id="rule-text" spellcheck="false"></textarea>
+  <div class="row" style="justify-content:flex-end">
+    <button id="rule-cancel">取消</button>
+    <button class="primary" id="rule-save">保存</button>
+  </div>
+</dialog>
+
+<dialog id="dlg-llm">
+  <h2 style="font-size:14px;color:var(--ink)">云端模型（可选）</h2>
+  <p class="muted" style="margin:0 0 4px">
+    规则看不懂的时候，让它看一眼。图片默认直接发给它看，比本地 OCR 准。
+    不配也能用，只是复杂的、写得含糊的通知容易漏时间。
+  </p>
+  <label class="flexline" style="margin-top:10px"><input type="checkbox" id="llm-enabled"> 启用模型兜底</label>
+  <label>API Key</label>
+  <input class="inp" id="llm-key" type="password" autocomplete="off" placeholder="sk-...">
+  <div class="muted" style="margin-top:3px">在 platform.deepseek.com 的「API keys」里生成，填一次就存在本机 <code>data/config.json</code> 里。</div>
+  <div class="grid2">
+    <div><label>模型名</label><input class="inp" id="llm-model" value="deepseek-flash"></div>
+    <div><label>图片怎么识别</label>
+      <select class="inp" id="llm-image">
+        <option value="model">模型直接看图（推荐）</option>
+        <option value="ocr">先用本地 OCR 再交给模型</option>
+      </select>
+    </div>
+  </div>
+  <label>什么时候调它</label>
+  <select class="inp" id="llm-mode">
+    <option value="fallback">规则没把握时才调（省钱，推荐）</option>
+    <option value="always">每次都用（最准，每次都花钱）</option>
+  </select>
+  <div id="llm-status" class="muted" style="margin-top:10px;min-height:20px"></div>
+  <div class="row" style="justify-content:flex-end">
+    <button id="llm-test">测试连接</button>
+    <button id="llm-cancel">取消</button>
+    <button class="primary" id="llm-save">保存</button>
+  </div>
+</dialog>
+
+<dialog id="dlg-qq">
+  <h2 style="font-size:14px;color:var(--ink)">QQ 小号</h2>
+  <p class="muted" style="margin:0 0 4px">
+    手机上把通知转发给这个小号，它认出来、排好提醒，到点再私聊你。
+    小号由本机的 NapCat 登录（就是官方 QQ 客户端加一层接口），<b>电脑得开着</b>。
+  </p>
+  <label class="flexline" style="margin-top:10px"><input type="checkbox" id="qq-enabled"> 启用 QQ 小号</label>
+  <div class="grid2">
+    <div><label>NapCat 接口地址</label><input class="inp" id="qq-api" placeholder="http://127.0.0.1:3000"></div>
+    <div><label>上报令牌（可选）</label><input class="inp" id="qq-token" type="password" autocomplete="off" placeholder="和 NapCat 里填的一致"></div>
+  </div>
+  <div class="grid2">
+    <div><label>你的 QQ（只认这一个号）</label><input class="inp" id="qq-owner" placeholder="123456789"></div>
+    <div><label>小号 QQ（可选）</label><input class="inp" id="qq-bot" placeholder="987654321"></div>
+  </div>
+  <div class="muted" style="margin-top:6px">
+    NapCat 那边把「HTTP 上报」地址填成 <code id="qq-endpoint">http://127.0.0.1:3790/api/onebot</code>，
+    消息格式选 <b>array</b>。
+  </div>
+  <div id="qq-status" class="muted" style="margin-top:10px;min-height:20px"></div>
+  <div class="row" style="justify-content:flex-end">
+    <button id="qq-test">测试连接</button>
+    <button id="qq-cancel">取消</button>
+    <button class="primary" id="qq-save">保存</button>
+  </div>
+</dialog>
+
+<dialog id="dlg-config">
+  <h2 style="font-size:14px;color:var(--ink)">推送通道</h2>
+  <p class="muted" style="margin:0 0 4px">电脑上的托盘通知默认就开着。这里配的是「电脑关机也能收到」的第二通道。不配也能用。</p>
+  <label>类型</label>
+  <select class="inp" id="cfg-type">
+    <option value="pushplus">PushPlus（微信）</option>
+    <option value="serverchan">Server酱（微信）</option>
+    <option value="generic">自定义 webhook</option>
+  </select>
+  <label>Token</label>
+  <input class="inp" id="cfg-token" placeholder="PushPlus / Server酱 的 token">
+  <label>webhook 地址（仅自定义类型需要）</label>
+  <input class="inp" id="cfg-url" placeholder="https://...">
+  <label class="flexline" style="margin-top:12px"><input type="checkbox" id="cfg-enabled"> 启用第二通道</label>
+  <div class="row" style="justify-content:flex-end">
+    <button id="cfg-cancel">取消</button>
+    <button class="primary" id="cfg-save">保存</button>
+  </div>
+</dialog>
+
+<script>
+const $ = id => document.getElementById(id);
+const fmt = iso => iso ? new Date(iso).toLocaleString("zh-CN",{timeZone:"Asia/Shanghai",hour12:false,month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"}) : "—";
+const rel = iso => {
+  const d = (Date.parse(iso) - Date.now()) / 1000;
+  if (d < 0) return "已过";
+  if (d < 3600) return Math.round(d/60) + " 分钟后";
+  if (d < 86400) return (d/3600).toFixed(1) + " 小时后";
+  return (d/86400).toFixed(1) + " 天后";
+};
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+let state = null;
+let lastPreview = null;
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    method: opts.body ? "POST" : "GET",
+    headers: opts.body ? {"content-type":"application/json"} : {},
+    body: opts.body ? JSON.stringify(opts.body) : undefined
+  });
+  const data = await res.json().catch(()=>({}));
+  if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+  return data;
+}
+
+function renderTasks(s) {
+  const box = $("tasks");
+  if (!s.tasks.length) { box.innerHTML = '<div class="empty">还没有任务。</div>'; return; }
+  box.innerHTML = s.tasks.map(t => {
+    const rems = (t.reminders||[]).map(r => `
+      <div class="rem">
+        <span>${fmt(r.fireAt)} <span class="muted">${r.status === "pending" ? rel(r.fireAt) : ({"sent":"已发","missed":"错过","skipped":"已跳过","error":"发送失败"}[r.status]||r.status)}</span></span>
+        ${r.status === "pending" ? `<span><button class="ghost tiny" data-send="${r.id}">现在发</button><button class="ghost tiny" data-skip="${r.id}">跳过</button></span>` : ""}
+      </div>`).join("") || '<div class="muted">没有排上提醒</div>';
+    const anchors = [["start","开始"],["end","结束"],["due","截止"]]
+      .map(([k,label]) => t[k] ? `<span class="muted">${label} ${fmt(t[k])}</span>` : `<span class="miss">${label} 未识别</span>`).join(" · ");
+    return `<div class="card">
+      <div class="flexline"><span class="tag">${esc(t.typeName)}</span>
+        <span class="muted">${esc(t.source||"")} · ${fmt(t.createdAt)}</span>
+        <button class="ghost tiny" style="margin-left:auto" data-del="${t.id}">删除</button></div>
+      <div class="title">${esc(t.title)}</div>
+      <div class="muted">${anchors}</div>
+      ${(t.notes||[]).map(n => `<div class="note">· ${esc(n)}</div>`).join("")}
+      ${t.needsInfo ? `<div class="row"><input class="inp" type="datetime-local" data-when="${t.id}" style="width:auto"><button class="tiny" data-set="${t.id}" data-anchor="${t.type && t.type.includes("作业") ? "due" : "start"}">补上时间</button></div>` : ""}
+      <div style="margin-top:6px">${rems}</div>
+    </div>`;
+  }).join("");
+}
+
+function renderInbox(s) {
+  const box = $("inbox");
+  if (!s.inbox.length) { box.innerHTML = '<div class="empty">—</div>'; return; }
+  box.innerHTML = s.inbox.map(i => `<div class="card">
+    <div class="muted">${fmt(i.at)}${i.source ? " · " + esc(i.source) : ""}</div>
+    <div>${esc(i.title || ("错过 " + (i.count || 0) + " 条"))}</div>
+    <div class="muted" style="white-space:pre-wrap">${esc(i.body || "")}</div>
+    ${i.id ? `<div class="row" style="margin-top:6px">
+      <button class="tiny" data-inbox-add="${i.id}">加入台账</button>
+      <button class="ghost tiny" data-inbox-drop="${i.id}">忽略</button>
+    </div>` : ""}
+  </div>`).join("");
+}
+
+function renderState(s) {
+  state = s;
+  $("s-pending").textContent = s.pending;
+  $("s-tasks").textContent = s.tasks.length;
+  $("s-next").textContent = s.next ? `下一条：${fmt(s.next.fireAt)}（${rel(s.next.fireAt)}）` : "下一条：—";
+  $("s-rule").innerHTML = s.ruleError
+    ? `<span class="tag bad">规则有错</span>`
+    : `<span class="muted">${s.rules.length} 条规则${s.config?.llm?.enabled ? " · 模型已开" : ""}</span>`;
+  renderTasks(s);
+  renderInbox(s);
+  const q = s.config?.qq;
+  $("qq-hint").innerHTML = q?.enabled
+    ? `已接小号，手机上把通知转发给它就行，到点它会私聊你${s.clipStatus?.lastQQ ? `　·　最近收到：${esc(s.clipStatus.lastQQ.text).slice(0, 40)}` : ""}`
+    : `还没接 QQ 小号 —— 现在只能在这里手动贴。想让它自己认，点右上角「QQ 小号」。`;
+}
+
+async function refresh() {
+  try { renderState(await api("/api/state")); } catch (e) { console.error(e); }
+}
+
+function modelLine(m) {
+  if (!m) return "";
+  if (!m.ok) {
+    if (m.skipped) return `<div class="muted">· 没调模型：${esc(m.reason || "")}</div>`;
+    return `<div class="miss">· 模型这次没帮上：${esc(m.error || "")}（上面是规则的结果）</div>`;
+  }
+  const bits = [m.model || "模型"];
+  if (m.latencyMs) bits.push(m.latencyMs < 1000 ? m.latencyMs + "ms" : (m.latencyMs / 1000).toFixed(1) + "s");
+  const u = m.usage;
+  if (u) {
+    bits.push(`输入 ${u.inputTokens} / 输出 ${u.outputTokens} token`);
+    if (u.costCNY) bits.push(`约 ¥${u.costCNY.toFixed(4)}`);
+  }
+  if (m.cached) bits.push("命中缓存，没重复花钱");
+  return `<div class="muted">· ${esc(bits.join(" · "))}</div>`;
+}
+
+function renderPreview(data) {
+  lastPreview = data;
+  const p = data.parsed;
+  if (!p) { $("preview").innerHTML = '<div class="empty">没识别出东西。</div>'; return; }
+  const conf = Math.round((p.confidence || 0) * 100);
+  const planned = data.planned || [];
+  const isModel = data.engine === "model";
+  $("preview").innerHTML = `
+    <div class="card fresh">
+      <div class="flexline">
+        <span class="tag">${esc(p.typeName)}</span>
+        ${isModel ? '<span class="tag model">模型识别</span>' : '<span class="tag">规则识别</span>'}
+        ${p.needsInfo ? '<span class="tag bad">缺时间</span>' : '<span class="tag ok">已识别</span>'}
+        ${p.matchedKeywords?.length ? `<span class="muted">命中：${esc(p.matchedKeywords.join("、"))}</span>` : ""}
+      </div>
+      <div class="title">${esc(p.title)}</div>
+      <div class="bar"><i style="width:${conf}%"></i></div>
+      <div class="muted">把握 ${conf}%${p.course ? " · 课程 " + esc(p.course) : ""}${p.location ? " · 地点 " + esc(p.location) : ""}</div>
+      <div class="kv">
+        <span>开始</span><span>${fmt(p.start)}</span>
+        <span>结束</span><span>${fmt(p.end)}</span>
+        <span>截止</span><span>${fmt(p.due)}</span>
+      </div>
+      ${(p.notes||[]).map(n => `<div class="note">· ${esc(n)}</div>`).join("")}
+      ${data.skipped?.length ? data.skipped.map(s => `<div class="miss">· ${esc(s.anchor)} 没排上：${esc(s.reason)}</div>`).join("") : ""}
+      ${data.expired ? `<div class="miss">· 有 ${data.expired} 个时间点已经过去了，不会排</div>` : ""}
+      ${modelLine(data.model)}
+      ${p.rawText && isModel ? `<details><summary>模型读到的原文（核对用）</summary><pre class="raw">${esc(p.rawText)}</pre></details>` : ""}
+      ${p.ruleGuess && isModel ? `<details><summary>规则单独看到的结果</summary><div class="muted" style="padding:4px 0">类型 ${esc(p.ruleGuess.typeName)} · 开始 ${fmt(p.ruleGuess.start)} · 截止 ${fmt(p.ruleGuess.due)} · 把握 ${Math.round((p.ruleGuess.confidence||0)*100)}%</div></details>` : ""}
+      <div style="margin-top:8px">
+        <div class="muted">会这样提醒你（${planned.length} 条）：</div>
+        ${planned.length ? planned.map(r => `<div class="rem"><span>${esc(r.text)}</span><span class="when">${fmt(r.fireAt)} · ${rel(r.fireAt)}</span></div>`).join("") : '<div class="miss">一条都排不上——多半是缺时间。</div>'}
+      </div>
+      <div class="row">
+        <button class="primary" id="btn-add">就按这个加入</button>
+        ${isModel ? "" : '<button class="tiny" id="btn-force-model">让模型再看看</button>'}
+      </div>
+    </div>`;
+  $("btn-add").onclick = addTask;
+  const fm = $("btn-force-model");
+  if (fm) fm.onclick = () => doParse("always");
+}
+
+async function doParse(force = "auto") {
+  const text = $("text").value.trim();
+  if (!text) { $("preview").innerHTML = '<div class="empty">左边贴点什么，这里会立刻显示结果。</div>'; return; }
+  if (force === "always") $("preview").innerHTML = '<div class="empty">正在让模型看…</div>';
+  try { renderPreview(await api("/api/parse", { body: { text, force } })); }
+  catch (e) { $("preview").innerHTML = `<div class="miss">${esc(e.message)}</div>`; }
+}
+
+async function addTask() {
+  const text = $("text").value.trim();
+  if (!text) return;
+  const btn = $("btn-add");
+  if (btn) { btn.disabled = true; btn.textContent = "加入中…"; }
+  try {
+    const r = await api("/api/add", { body: { text, source: lastPreview?.ocr ? "图片" : "粘贴" } });
+    $("text").value = "";
+    $("preview").innerHTML = '<div class="empty">已加入。左边可以贴下一条。</div>';
+    await refresh();
+  } catch (e) {
+    alert("没加上：" + e.message);
+    if (btn) { btn.disabled = false; btn.textContent = "就按这个加入"; }
+  }
+}
+
+let timer = null;
+$("text").addEventListener("input", () => {
+  clearTimeout(timer);
+  timer = setTimeout(() => doParse(), 450);
+});
+$("btn-parse").onclick = doParse;
+$("btn-clear").onclick = () => { $("text").value = ""; $("preview").innerHTML = '<div class="empty">左边贴点什么，这里会立刻显示结果。</div>'; };
+$("btn-refresh").onclick = refresh;
+
+async function handleImage(file) {
+  $("ocr-tip").textContent = "正在看图…";
+  $("preview").innerHTML = '<div class="empty">正在看这张图…</div>';
+  try {
+    const dataUrl = await new Promise((res, rej) => {
+      const fr = new FileReader();
+      fr.onload = () => res(fr.result);
+      fr.onerror = rej;
+      fr.readAsDataURL(file);
+    });
+    const r = await api("/api/ocr", { body: { dataUrl } });
+    if (!r.ok) { $("ocr-tip").textContent = "识别失败"; $("preview").innerHTML = `<div class="miss">${esc(r.error)}</div>`; return; }
+    $("text").value = r.text || "";
+    if (r.parsed) {
+      // 模型直接看懂了，不用再走一遍文本解析
+      $("ocr-tip").textContent = "模型看完了，核对一下";
+      renderPreview({ parsed: r.parsed, planned: r.planned, skipped: r.skipped, expired: r.expired, model: r.model, engine: r.engine, ocr: true });
+    } else {
+      $("ocr-tip").textContent = `本地 OCR 取出 ${r.lines || 0} 行文字，看一眼对不对`;
+      lastPreview = { ...(lastPreview || {}), ocr: true };
+      doParse();
+    }
+  } catch (e) {
+    $("ocr-tip").textContent = "识别失败";
+    $("preview").innerHTML = `<div class="miss">${esc(e.message)}</div>`;
+  }
+}
+
+const drop = $("drop");
+drop.onclick = () => $("file").click();
+$("file").onchange = e => { if (e.target.files[0]) handleImage(e.target.files[0]); };
+drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", e => {
+  e.preventDefault(); drop.classList.remove("over");
+  const f = [...e.dataTransfer.files].find(f => f.type.startsWith("image/"));
+  if (f) handleImage(f);
+});
+
+document.addEventListener("paste", e => {
+  const item = [...(e.clipboardData?.items || [])].find(i => i.type.startsWith("image/"));
+  if (item) { e.preventDefault(); handleImage(item.getAsFile()); }
+});
+
+$("tasks").addEventListener("click", async e => {
+  const t = e.target;
+  if (t.dataset.send) { await api(`/api/reminder/${t.dataset.send}/send`, { body: {} }); refresh(); }
+  if (t.dataset.skip) { await api(`/api/reminder/${t.dataset.skip}/skip`, { body: {} }); refresh(); }
+  if (t.dataset.del) { if (confirm("删掉这条任务和它的提醒？")) { await fetch(`/api/task/${t.dataset.del}`, { method: "DELETE" }); refresh(); } }
+  if (t.dataset.set) {
+    const inp = document.querySelector(`[data-when="${t.dataset.set}"]`);
+    if (!inp.value) { alert("先选个时间"); return; }
+    await api(`/api/task/${t.dataset.set}/time`, { body: { anchor: t.dataset.anchor, value: inp.value } });
+    refresh();
+  }
+});
+
+$("btn-test").onclick = async () => {
+  const r = await api("/api/test-notify", { body: {} });
+  if (!r.detail.toast) alert("托盘通知没弹出来（下面通道状态里能看到原因）\n" + (r.detail.webhook === "skip" ? "第二通道没启用" : ""));
+};
+
+$("btn-rules").onclick = () => {
+  const list = (state?.rules || []).map(r => `· ${r.file}　${r.name}　优先级 ${r.priority}　提醒 ${r.reminders.length} 条`).join("\n");
+  const pick = prompt("输入要编辑的规则文件名（如 作业.json）：\n\n" + list);
+  if (!pick) return;
+  const rule = (state?.rules || []).find(r => r.file === pick);
+  if (!rule) { alert("没这个文件"); return; }
+  $("rule-name").textContent = "编辑 " + rule.file;
+  $("rule-text").value = JSON.stringify(rule, null, 2);
+  $("dlg-rule").dataset.file = rule.file;
+  $("dlg-rule").showModal();
+};
+$("rule-cancel").onclick = () => $("dlg-rule").close();
+$("rule-save").onclick = async () => {
+  const file = $("dlg-rule").dataset.file;
+  try {
+    const data = JSON.parse($("rule-text").value);
+    await api(`/api/rules/${encodeURIComponent(file)}`, { body: data });
+    $("dlg-rule").close();
+    await refresh();
+    alert("存好了，新的规则立刻生效。");
+  } catch (e) { alert("存不了：" + e.message); }
+};
+
+$("btn-config").onclick = async () => {
+  $("cfg-type").value = "pushplus";
+  $("cfg-token").value = "";
+  $("cfg-url").value = "";
+  $("cfg-enabled").checked = false;
+  const r = state || await fetch("/api/state").then(x => x.json());
+  const w = r.config?.webhook;
+  if (w) {
+    $("cfg-type").value = w.type || "pushplus";
+    $("cfg-enabled").checked = !!w.enabled;
+    $("cfg-token").value = w.token === "已填写" ? "" : (w.token || "");
+    $("cfg-token").placeholder = w.token === "已填写" ? "已保存，留空不改" : "PushPlus / Server酱 的 token";
+    $("cfg-url").value = w.url || "";
+  }
+  $("dlg-config").showModal();
+};
+$("cfg-cancel").onclick = () => $("dlg-config").close();
+$("cfg-save").onclick = async () => {
+  await api("/api/config", { body: { webhook: {
+    enabled: $("cfg-enabled").checked,
+    type: $("cfg-type").value,
+    token: $("cfg-token").value,
+    url: $("cfg-url").value
+  }}});
+  $("dlg-config").close();
+  await refresh();
+  alert("存好了。");
+};
+
+// ---- QQ 小号 ----
+let qqTokenDirty = false;
+
+$("btn-qq").onclick = () => {
+  const q = state?.config?.qq || {};
+  $("qq-enabled").checked = !!q.enabled;
+  $("qq-api").value = q.api || "http://127.0.0.1:3000";
+  $("qq-owner").value = q.owner || "";
+  $("qq-bot").value = q.bot || "";
+  $("qq-token").value = "";
+  $("qq-token").placeholder = q.hasToken ? `已保存 ${q.tokenHint || ""}，留空不改` : "和 NapCat 里填的一致";
+  $("qq-endpoint").textContent = `http://127.0.0.1:${location.port || 3790}/api/onebot`;
+  $("qq-status").textContent = "";
+  qqTokenDirty = false;
+  $("dlg-qq").showModal();
+};
+
+$("qq-token").addEventListener("input", () => { qqTokenDirty = true; });
+$("qq-cancel").onclick = () => $("dlg-qq").close();
+
+function qqForm() {
+  const o = {
+    enabled: $("qq-enabled").checked,
+    api: $("qq-api").value.trim() || "http://127.0.0.1:3000",
+    owner: $("qq-owner").value.trim(),
+    bot: $("qq-bot").value.trim()
+  };
+  if (qqTokenDirty) o.token = $("qq-token").value.trim();
+  return o;
+}
+
+$("qq-test").onclick = async () => {
+  $("qq-status").innerHTML = '<span class="muted">正在连 NapCat…</span>';
+  try {
+    const r = await api("/api/qq-probe", { body: { qq: qqForm() } });
+    if (r.ok) {
+      $("qq-status").innerHTML = `<span class="tag ok">连上了</span> 登录的是 ${esc(r.nickname || "")}（${esc(r.user_id || "")}）`
+        + (r.warning ? `<div class="note">${esc(r.warning)}</div>` : "");
+    } else {
+      $("qq-status").innerHTML = `<span class="tag bad">连不上</span> ${esc(r.error || "")}
+        <div class="muted" style="margin-top:4px">先确认 NapCat 已经启动、接口地址和端口填对了。</div>`;
+    }
+  } catch (e) { $("qq-status").textContent = "测试失败：" + e.message; }
+};
+
+$("qq-save").onclick = async () => {
+  const o = qqForm();
+  if (o.enabled && !o.owner) { alert("得填上你自己的 QQ 号，否则谁发消息都能塞任务进来。"); return; }
+  try {
+    await api("/api/config", { body: { qq: o } });
+    $("dlg-qq").close();
+    await refresh();
+  } catch (e) { alert("存不了：" + e.message); }
+};
+
+$("inbox").addEventListener("click", async e => {
+  const t = e.target;
+  if (t.dataset.inboxAdd) { await api(`/api/inbox/${t.dataset.inboxAdd}/add`, { body: {} }); refresh(); }
+  if (t.dataset.inboxDrop) { await api(`/api/inbox/${t.dataset.inboxDrop}/dismiss`, { body: {} }); refresh(); }
+});
+
+// ---- 模型配置 ----
+let llmKeyDirty = false;
+
+function llmForm() {
+  const o = {
+    enabled: $("llm-enabled").checked,
+    model: $("llm-model").value.trim() || "deepseek-flash",
+    mode: $("llm-mode").value,
+    imageMode: $("llm-image").value
+  };
+  if (llmKeyDirty) o.apiKey = $("llm-key").value.trim();
+  return o;
+}
+
+$("btn-llm").onclick = () => {
+  const c = state?.config?.llm || {};
+  $("llm-enabled").checked = c.hasKey ? c.enabled !== false : false;
+  $("llm-key").value = "";
+  $("llm-key").placeholder = c.hasKey ? `已保存 ${c.keyHint || ""}，留空不改` : "sk-...";
+  $("llm-model").value = c.model || "deepseek-flash";
+  $("llm-mode").value = c.mode || "fallback";
+  $("llm-image").value = c.imageMode || "model";
+  $("llm-status").textContent = "";
+  llmKeyDirty = false;
+  $("dlg-llm").showModal();
+};
+
+$("llm-key").addEventListener("input", () => { llmKeyDirty = true; });
+$("llm-cancel").onclick = () => $("dlg-llm").close();
+
+$("llm-test").onclick = async () => {
+  $("llm-status").innerHTML = '<span class="muted">测试中…（只测不存）</span>';
+  try {
+    const r = await api("/api/llm-probe", { body: { llm: llmForm() } });
+    if (r.ok) {
+      $("llm-status").innerHTML = `<span class="tag ok">通了</span> ${esc(r.model)} · ${r.latencyMs}ms · 回复「${esc(r.reply || "")}」 · 这次约 ¥${(r.costCNY || 0).toFixed(4)}`;
+    } else {
+      $("llm-status").innerHTML = `<span class="tag bad">不通</span> ${esc(r.error || "")}`;
+    }
+  } catch (e) {
+    $("llm-status").textContent = "测试失败：" + e.message;
+  }
+};
+
+$("llm-save").onclick = async () => {
+  try {
+    const r = await api("/api/config", { body: { llm: llmForm() } });
+    $("dlg-llm").close();
+    await refresh();
+    const c = r.config?.llm;
+    if (llmKeyDirty === false && !c?.hasKey) alert("存好了，但没有 API Key，模型还不会生效。");
+    else if (!c?.enabled) alert("存好了。开关是关的，暂时不会用模型。");
+  } catch (e) { alert("存不了：" + e.message); }
+};
+
+refresh();
+setInterval(refresh, 20000);
+</script>
+</body>
+</html>

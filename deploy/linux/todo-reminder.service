@@ -1,0 +1,21 @@
+[Unit]
+Description=待办提醒 Todo Reminder
+# NapCat 通常在同一台机器上跑 Docker，先等它起来
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/todo-reminder
+Environment=TZ=Asia/Shanghai
+Environment=LANG=C.UTF-8
+# 服务器上没有图形界面，别去开浏览器
+Environment=TODO_NO_OPEN=1
+# NapCat 的 WS 服务地址；HTTP 上报仍照旧走 3790/api/onebot
+Environment=TODO_QQ_WS=ws://127.0.0.1:3001
+ExecStart=/usr/bin/node src/server.mjs
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,54 @@
+{
+  "llm": {
+    "enabled": true,
+    "model": "deepseek-flash",
+    "apiKey": "sk-在这里填你的模型 API Key",
+    "baseUrl": "https://api.deepseek.com",
+    "mode": "fallback",
+    "imageMode": "model",
+    "effort": "high",
+    "maxTokens": 3000
+  },
+  "qq": {
+    "enabled": true,
+    "api": "http://127.0.0.1:3000",
+    "token": "",
+    "owner": "你的主号 QQ",
+    "bot": "小号 QQ",
+    "groups": [],
+    "groupMode": "chatty",
+    "groupCooldownMs": 0,
+    "groupMaxPerHour": 0,
+    "botAlias": ["小助手"]
+  },
+  "alert": {
+    "enabled": false,
+    "offlineMinutes": 10,
+    "notifyOnRecover": true,
+    "smtp": {
+      "host": "smtp.qq.com",
+      "port": 465,
+      "user": "你的邮箱@qq.com",
+      "pass": "邮箱授权码，不是登录密码",
+      "to": "收件邮箱@qq.com"
+    }
+  },
+  "clipboard": {
+    "enabled": false,
+    "autoAdd": true,
+    "onlyFromQQ": true
+  },
+  "webhook": {
+    "enabled": false,
+    "type": "wxpusher",
+    "token": "",
+    "url": ""
+  },
+  "cloud": {
+    "enabled": false,
+    "url": "",
+    "token": "",
+    "days": 7
+  },
+  "notifyDesktop": false
+}

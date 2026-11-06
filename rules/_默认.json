@@ -1,0 +1,11 @@
+{
+  "name": "其他",
+  "priority": 0,
+  "isDefault": true,
+  "defaultAnchor": "start",
+  "match": [],
+  "reminders": [
+    { "anchor": "start", "before": "1h", "text": "1 小时后" },
+    { "anchor": "start", "before": "0m", "text": "到点了" }
+  ]
+}

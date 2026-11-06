@@ -1,0 +1,10 @@
+{
+  "name": "小测",
+  "priority": 80,
+  "defaultAnchor": "start",
+  "match": ["小测", "随堂", "测验", "quiz", "听写", "课堂练习"],
+  "reminders": [
+    { "anchor": "start", "before": "5m", "text": "5 分钟后开始，收好书本" },
+    { "anchor": "end", "before": "60m", "text": "还有 1 小时结束" }
+  ]
+}

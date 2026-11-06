@@ -1,0 +1,12 @@
+{
+  "name": "考试",
+  "priority": 90,
+  "defaultAnchor": "start",
+  "match": ["考试", "期中", "期末", "统考", "补考", "机考", "考试时间", "期末考试", "期中考试", "开考时间"],
+  "reminders": [
+    { "anchor": "start", "before": "1d", "text": "明天考试" },
+    { "anchor": "start", "before": "1h", "text": "1 小时后开考，带好证件" },
+    { "anchor": "start", "before": "15m", "text": "15 分钟后开考" },
+    { "anchor": "end", "before": "30m", "text": "还剩半小时，检查一下进度", "when": { "minDuration": 60 } }
+  ]
+}

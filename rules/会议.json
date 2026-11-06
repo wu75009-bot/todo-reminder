@@ -1,0 +1,11 @@
+{
+  "name": "会议",
+  "priority": 60,
+  "defaultAnchor": "start",
+  "match": ["会议", "开会", "班会", "例会", "讲座", "宣讲", "答辩"],
+  "reminders": [
+    { "anchor": "start", "before": "30m", "text": "30 分钟后开始" },
+    { "anchor": "start", "before": "5m", "text": "5 分钟后开始" },
+    { "anchor": "start", "before": "0m", "text": "开始了" }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "name": "作业",
+  "priority": 50,
+  "defaultAnchor": "due",
+  "match": ["作业", "实验报告", "报告", "课程论文", "提交", "上交", "DDL", "deadline", "提交时间", "截止时间", "作业要求"],
+  "reminders": [
+    { "anchor": "due", "before": "2d", "text": "还有 2 天截止" },
+    { "anchor": "due", "before": "1d", "text": "明天截止" },
+    { "anchor": "due", "before": "3h", "text": "还有 3 小时截止" },
+    { "anchor": "due", "before": "0m", "text": "到截止时间了" }
+  ]
+}
