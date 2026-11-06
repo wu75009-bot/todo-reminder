@@ -93,7 +93,7 @@ flowchart LR
 需要 Node **20.6+**（用到了 `import.meta.dirname`）。
 
 ```bash
-git clone <你的仓库地址> todo-reminder
+git clone https://github.com/wu75009-bot/todo-reminder.git todo-reminder
 cd todo-reminder
 mkdir -p data && cp config.example.json data/config.json
 node src/server.mjs
