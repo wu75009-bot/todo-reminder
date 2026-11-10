@@ -52,6 +52,31 @@
   header h1 { font-size: 20px; font-weight: 650; margin: 0; letter-spacing: .2px; }
   header .sub { font-size: 13px; color: var(--muted); }
 
+  /* 页头右边的刷新。不是所有人都会下拉，留一个能点的地方，
+     免得界面更新后只能靠杀进程才能看到。 */
+  header .refresh {
+    margin-left: auto; align-self: center;
+    width: 34px; height: 34px; padding: 0; border: 0; border-radius: 10px;
+    background: transparent; color: var(--muted);
+    font-size: 17px; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+  }
+  header .refresh:active { background: var(--card); color: var(--accent); }
+  header .refresh.spin { animation: spin .6s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* 下拉时从顶部滑下来的小提示。只做反馈，不拦手势。 */
+  .pulltip {
+    position: fixed; left: 50%; top: calc(env(safe-area-inset-top) + 8px); z-index: 90;
+    padding: 7px 15px; border-radius: 999px; white-space: nowrap;
+    background: var(--card); color: var(--muted);
+    font-size: 13px; box-shadow: 0 4px 14px rgba(16, 24, 40, .16);
+    opacity: 0; transform: translate(-50%, -44px); pointer-events: none;
+    transition: transform .16s ease, opacity .16s ease;
+  }
+  .pulltip.on { opacity: 1; transform: translate(-50%, 0); }
+  .pulltip.ready { color: var(--accent); font-weight: 600; }
+
   .composer {
     background: var(--card);
     border-radius: 16px;
@@ -292,6 +317,7 @@
   <header>
     <h1>待办</h1>
     <span class="sub" id="sub">—</span>
+    <button class="refresh" id="btnReload" aria-label="刷新页面" title="刷新">⟳</button>
   </header>
 
   <div id="app" hidden>
@@ -340,6 +366,7 @@
 </div>
 
 <div class="toast" id="toast"></div>
+<div class="pulltip" id="pullTip">下拉刷新</div>
 
 <!-- 改提醒时间：列出现在所有的点，删/加，点保存一次性提交。
      原来的固定提醒默认都在列表里，不动它就还是原来的时间。 -->
@@ -410,6 +437,72 @@
     $("locked").hidden = false;
     $("sub").textContent = "";
   }
+
+  // ---------- 刷新 ----------
+  // WebView 里压根没有浏览器那套「下拉刷新」：手指往下拉只会顶出一个回弹，
+  // 页面一动不动。所以后台改了界面，手机上不杀进程就永远看到旧的那一版。
+  // 这里自己认手势，够长了就整页重载，带个随机参数顺手绕开缓存。
+  function hardReload() {
+    if (!token) { location.reload(); return; }
+    location.replace("/m?t=" + encodeURIComponent(token) + "&_r=" + Date.now());
+  }
+
+  const PULL_AT = 76;                 // 拉这么长（px）才算数
+  const tipPull = () => $("pullTip");
+  let pullFrom = 0, pullOn = false, pullLen = 0;
+
+  function pullShow(ready) {
+    const t = tipPull();
+    t.textContent = ready ? "松开刷新" : "下拉刷新";
+    t.classList.toggle("ready", ready);
+    t.classList.add("on");
+  }
+
+  function pullHide() {
+    tipPull().classList.remove("on", "ready");
+  }
+
+  document.addEventListener("touchstart", e => {
+    pullOn = false;
+    if (e.touches.length !== 1 || window.scrollY > 0) return;
+    // 输入框里、面板里、按钮上的手势不算下拉，别打断正在干的事
+    const t = e.target;
+    if (t && t.closest && t.closest("textarea, input, button, .sheet")) return;
+    pullFrom = e.touches[0].clientY;
+    pullLen = 0;
+    pullOn = true;
+  }, { passive: true });
+
+  document.addEventListener("touchmove", e => {
+    if (!pullOn) return;
+    const dy = e.touches[0].clientY - pullFrom;
+    // 往上推、或者页面已经滚下去了，都不算下拉
+    if (dy <= 0 || window.scrollY > 0) { pullOn = false; pullHide(); return; }
+    pullLen = dy;
+    if (dy > 14) pullShow(dy >= PULL_AT);
+  }, { passive: true });
+
+  function pullEnd(aborted) {
+    if (!pullOn) { pullHide(); return; }
+    pullOn = false;
+    if (!aborted && pullLen >= PULL_AT) {
+      const t = tipPull();
+      t.textContent = "刷新中…";
+      t.classList.remove("ready");
+      t.classList.add("on");
+      hardReload();
+    } else {
+      pullHide();
+    }
+  }
+
+  document.addEventListener("touchend", () => pullEnd(false));
+  document.addEventListener("touchcancel", () => pullEnd(true));
+
+  // 从别的 App 切回来时顺手拉一次数据：不刷整页也能看到最新状态
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && !$("app").hidden) refresh();
+  });
 
   // ---------- 时间显示 ----------
   const WD = ["周日","周一","周二","周三","周四","周五","周六"];
@@ -865,6 +958,10 @@
     const box = $("doneBox");
     box.hidden = !box.hidden;
     $("doneHead").classList.toggle("open", !box.hidden);
+  });
+  $("btnReload").addEventListener("click", () => {
+    $("btnReload").classList.add("spin");
+    hardReload();
   });
   $("icsLink").addEventListener("click", e => {
     e.preventDefault();

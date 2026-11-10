@@ -10,9 +10,20 @@ _qr*.png
 _qr*.html
 _test-group-img.png
 
+# 回归脚本用的隔离数据目录（里面是真实 config 的副本，含密钥）
+_tm-test/
+
 # ===== 打包产物 =====
 *.tar.gz
 *.zip
+android/build/
+android/*.apk
+android/*.idsig
+
+# 截图脚本的产物
+_shotm-*.png
+_shotsheet-*.png
+_shotpull.png
 
 # ===== 依赖与系统文件 =====
 node_modules/
@@ -26,12 +37,3 @@ Thumbs.db
 # ===== 本地覆盖配置 =====
 .env
 .env.local
-android/build/
-android/*.apk
-android/*.idsig
-_shotm-*.png
-android/*.apk
-android/*.idsig
-_shotm-*.png
-_shotsheet-*.png
-_shotsheet-*.png
