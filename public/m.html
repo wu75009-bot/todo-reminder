@@ -184,6 +184,68 @@
   footer .tip { margin-top: 14px; padding: 8px 12px; border: 1px dashed var(--line); border-radius: 10px; }
   footer .tip[hidden] { display: none; }
 
+  /* ---------- 提醒时间面板 ---------- */
+  /* 卡片上一个「改时间」，点开从底部升起来。
+     列表里就是这条任务现在所有的提醒点，删一个少一个，加一个多一个。 */
+  .task .actions button.edit {
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    color: var(--accent);
+  }
+  .task .actions button { flex: 1; min-width: 0; }
+
+  .sheet { position: fixed; inset: 0; z-index: 60; display: flex; align-items: flex-end; }
+  .sheet[hidden] { display: none; }
+  .sheet-mask { position: absolute; inset: 0; background: rgba(0, 0, 0, .4); }
+  .sheet-body {
+    position: relative; width: 100%;
+    background: var(--bg);
+    border-radius: 18px 18px 0 0;
+    padding: 16px 18px calc(16px + env(safe-area-inset-bottom));
+    max-height: 88vh; overflow-y: auto;
+    box-shadow: 0 -10px 30px rgba(0, 0, 0, .22);
+    animation: slideup .2s cubic-bezier(.22, .61, .36, 1);
+  }
+  @keyframes slideup { from { transform: translateY(100%); } to { transform: none; } }
+  .sheet-body h3 { margin: 0; font-size: 16px; font-weight: 650; }
+  .sheet-body .who {
+    font-size: 13px; color: var(--muted); margin: 4px 0 14px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  .plist { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+  .plist .none { font-size: 13.5px; color: var(--muted); padding: 10px 0; text-align: center; }
+  .prow {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--card); border-radius: 11px;
+    padding: 11px 10px 11px 14px; box-shadow: var(--shadow);
+  }
+  .prow .when { flex: 1; font-size: 14.5px; font-variant-numeric: tabular-nums; }
+  .prow .when small { display: block; font-size: 11.5px; color: var(--muted); margin-top: 1px; }
+  .prow .x {
+    width: 32px; height: 32px; padding: 0; border-radius: 8px; font-size: 17px;
+    background: color-mix(in srgb, var(--danger) 10%, transparent);
+    color: var(--danger); display: flex; align-items: center; justify-content: center;
+  }
+
+  .pquick { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .pquick button {
+    font-size: 13px; padding: 8px 12px; border-radius: 999px; min-height: 34px;
+    background: var(--card); color: var(--text); box-shadow: var(--shadow);
+  }
+  .padd { display: flex; gap: 8px; margin-bottom: 6px; }
+  .padd input[type="datetime-local"] {
+    flex: 1; min-width: 0; font-size: 15px; font-family: inherit;
+    padding: 10px 12px; border-radius: 11px;
+    border: 1px solid var(--line); background: var(--card); color: var(--text);
+    -webkit-appearance: none; appearance: none;
+  }
+  .padd button { padding: 0 16px; min-height: 44px; border-radius: 11px; }
+
+  .sheet-actions { display: flex; gap: 10px; margin-top: 14px; }
+  .sheet-actions button { flex: 1; min-height: 46px; border-radius: 12px; font-size: 15px; }
+  .sheet-actions .auto { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+  .sheet-actions .auto[disabled] { opacity: .4; }
+
   .toast {
     position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 22px);
     transform: translate(-50%, 12px);
@@ -255,6 +317,26 @@
 </div>
 
 <div class="toast" id="toast"></div>
+
+<!-- 改提醒时间：列出现在所有的点，删/加，点保存一次性提交。
+     原来的固定提醒默认都在列表里，不动它就还是原来的时间。 -->
+<div class="sheet" id="sheet" hidden>
+  <div class="sheet-mask" data-close="1"></div>
+  <div class="sheet-body">
+    <h3>什么时候提醒你</h3>
+    <div class="who" id="sheetWho"></div>
+    <div class="plist" id="plist"></div>
+    <div class="pquick" id="pquick"></div>
+    <div class="padd">
+      <input type="datetime-local" id="pinput">
+      <button id="paddBtn">加</button>
+    </div>
+    <div class="sheet-actions">
+      <button class="auto" id="pAuto">按规则自动排</button>
+      <button id="pSave">保存</button>
+    </div>
+  </div>
+</div>
 
 <script>
 (function () {
@@ -343,7 +425,7 @@
     const live = [], gone = [];
     for (const t of tasks) {
       const a = anchorOf(t);
-      const hasFuture = (t.reminders || []).some(r => r.status === "pending" && r.fireAt > now);
+      const hasFuture = (t.reminders || []).some(r => r.status === "pending" && Date.parse(r.fireAt) > now);
       if (Number.isFinite(a) && a < now && !hasFuture) gone.push(t);
       else live.push(t);
     }
@@ -390,20 +472,32 @@
 
   function anchorOf(t) {
     const s = t.start || t.due;
-    return s ? Date.parse(s) : NaN;
+    if (s) { const at = Date.parse(s); if (Number.isFinite(at)) return at; }
+    // 没写时间（「作业发下来了」这类）就按第一个提醒点排，
+    // 否则设好时间的任务还沉在列表最底下，等于白设。
+    const first = (t.reminders || [])
+      .filter(r => r.status === "pending")
+      .map(r => Date.parse(r.fireAt))
+      .filter(Number.isFinite)
+      .sort((a, b) => a - b)[0];
+    return Number.isFinite(first) ? first : NaN;
   }
 
   function card(t, now, expired) {
     const rs = (t.reminders || [])
       .filter(r => r.status === "pending")
-      .sort((a, b) => a.fireAt - b.fireAt);
+      .sort((a, b) => Date.parse(a.fireAt) - Date.parse(b.fireAt));
     const chips = rs.map(r => {
-      const past = r.fireAt < now;
-      return '<span class="chip' + (past ? " past" : "") + '">' + timeLabel(r.fireAt) + "</span>";
+      const at = Date.parse(r.fireAt);
+      const past = at < now;
+      return '<span class="chip' + (past ? " past" : "") + '">' + timeLabel(at) + "</span>";
     }).join("");
     // start 是「几点开始」，due 是「几点之前交完」。两种都要认，
     // 只认 start 会让所有「交作业/报名截止」这类任务在手机上不显示时间。
-    const a = anchorOf(t);
+    // 注意这里只看任务自己的时间，不看提醒点：否则「20:00 提醒你」会被
+    // 显示成「截止 20:00」，等于凭空造了个截止时间出来。
+    const s = t.start || t.due;
+    const a = s ? Date.parse(s) : NaN;
     const meta = Number.isFinite(a)
       ? "<div class=\"meta\">" + (t.start ? "" : "截止 ") + timeLabel(a) + "</div>"
       : "";
@@ -414,6 +508,7 @@
       +   (chips ? '<div class="chips">' + chips + "</div>" : "")
       +   '<div class="actions">'
       +     '<button class="done" data-act="done">完成了</button>'
+      +     '<button class="edit" data-act="edit">改时间</button>'
       +     '<button class="del" data-act="drop">删掉</button>'
       +   "</div>"
       + "</div>";
@@ -556,6 +651,127 @@
     }
   }
 
+  // ---------- 改提醒时间 ----------
+  // draft 是「我最终想要的那几个时刻」。打开面板时把现有的点全部灌进来，
+  // 所以什么都不动就保存 = 原样保留，原有的固定提醒一个都不会丢。
+  let sheetId = "";
+  let draft = [];
+
+  function dtValue(ms) {
+    const d = new Date(ms);
+    return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate())
+      + "T" + pad(d.getHours()) + ":" + pad(d.getMinutes());
+  }
+
+  function longLabel(ms) {
+    const d = new Date(ms);
+    return (d.getMonth() + 1) + "月" + d.getDate() + "日 " + WD[d.getDay()];
+  }
+
+  // 常用的几个点。只给还没到的，省得点了一下又提示「已经过去了」。
+  function quickPicks() {
+    const now = new Date();
+    const at = (base, h, m) => new Date(base.getFullYear(), base.getMonth(), base.getDate(), h, m).getTime();
+    const d1 = new Date(now.getTime() + 86400000);
+    const d2 = new Date(now.getTime() + 2 * 86400000);
+    const out = [];
+    const push = (ms, label) => { if (ms > Date.now() + 60000) out.push({ ms, label }); };
+    push(at(now, 20, 0), "今晚 20:00");
+    push(at(d1, 8, 0), "明早 8:00");
+    push(at(d1, 12, 0), "明天中午");
+    push(at(d1, 20, 0), "明晚 20:00");
+    push(at(d2, 20, 0), "后天 20:00");
+    return out;
+  }
+
+  function openSheet(task) {
+    sheetId = task.id;
+    const now = Date.now();
+    draft = [...new Set(
+      (task.reminders || [])
+        .filter(r => r.status === "pending" && Date.parse(r.fireAt) > now - 60000)
+        .map(r => Date.parse(r.fireAt))
+    )].sort((a, b) => a - b);
+
+    $("sheetWho").textContent = task.title || "(没写标题)";
+    // 没有规则的任务点「按规则自动排」等于清空，这个按钮别给
+    $("pAuto").hidden = !task.ruleFile;
+    // 输入框预填「明天 20:00」：作业、通知类的提醒多半落在这个点，
+    // 比按当前时间 +1 小时（凌晨一点）有用得多。
+    const d1 = new Date(now + 86400000);
+    $("pinput").value = dtValue(new Date(d1.getFullYear(), d1.getMonth(), d1.getDate(), 20, 0).getTime());
+    renderDraft();
+    $("sheet").hidden = false;
+    document.body.style.overflow = "hidden";
+  }
+
+  function closeSheet() {
+    $("sheet").hidden = true;
+    document.body.style.overflow = "";
+  }
+
+  function renderDraft() {
+    $("plist").innerHTML = draft.length
+      ? draft.map((ms, i) =>
+          '<div class="prow">'
+          + '<div class="when">' + timeLabel(ms) + "<small>" + longLabel(ms) + "</small></div>"
+          + '<button class="x" data-i="' + i + '" aria-label="删掉这个时间">×</button>'
+          + "</div>").join("")
+      : '<div class="none">这条还没有提醒时间，下面加一个</div>';
+
+    const q = quickPicks().filter(x => !draft.includes(x.ms));
+    $("pquick").innerHTML = q.map(x =>
+      '<button data-ms="' + x.ms + '">' + x.label + "</button>").join("");
+  }
+
+  function addPoint(ms) {
+    if (!Number.isFinite(ms)) return;
+    if (ms <= Date.now()) { toast("这个时间已经过去了"); return; }
+    if (draft.includes(ms)) { toast("这个时间已经加过了"); return; }
+    draft.push(ms);
+    draft.sort((a, b) => a - b);
+    renderDraft();
+  }
+
+  async function saveDraft() {
+    const btn = $("pSave");
+    btn.disabled = true;
+    btn.textContent = "保存中";
+    try {
+      await api("/api/mobile/reminders", {
+        method: "POST",
+        body: JSON.stringify({ id: sheetId, points: draft.map(ms => new Date(ms).toISOString()) })
+      });
+      const n = draft.length;
+      closeSheet();
+      await refresh();
+      toast(n ? "改好了，会在这些时候叫你" : "提醒都清掉了，这条不会再叫你");
+    } catch (e) {
+      if (e.message !== "unauthorized") toast("没保存上：" + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "保存";
+    }
+  }
+
+  async function restoreAuto() {
+    const btn = $("pAuto");
+    btn.disabled = true;
+    try {
+      const r = await api("/api/mobile/reminders", {
+        method: "POST",
+        body: JSON.stringify({ id: sheetId, mode: "auto" })
+      });
+      closeSheet();
+      await refresh();
+      toast("已按规则重排，" + (r.reminders || []).length + " 个提醒");
+    } catch (e) {
+      if (e.message !== "unauthorized") toast("没改成：" + e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
   function autosize() {
     const ta = $("input");
     ta.style.height = "auto";
@@ -577,6 +793,11 @@
     const btn = e.target.closest("button[data-act]");
     if (!btn) return;
     const id = btn.closest(".task").dataset.id;
+    if (btn.dataset.act === "edit") {
+      const t = ((state && state.tasks) || []).find(x => x.id === id);
+      if (t) openSheet(t);
+      return;
+    }
     act(id, btn.dataset.act);
   };
   $("tasks").addEventListener("click", onCardTap);
@@ -595,6 +816,31 @@
       return;
     }
     location.href = "/api/calendar.ics?days=60&t=" + encodeURIComponent(token);
+  });
+
+  // 时间面板
+  $("plist").addEventListener("click", e => {
+    const b = e.target.closest("button[data-i]");
+    if (!b) return;
+    draft.splice(Number(b.dataset.i), 1);
+    renderDraft();
+  });
+  $("pquick").addEventListener("click", e => {
+    const b = e.target.closest("button[data-ms]");
+    if (b) addPoint(Number(b.dataset.ms));
+  });
+  $("paddBtn").addEventListener("click", () => {
+    const v = $("pinput").value;
+    if (!v) { toast("先选个时间"); return; }
+    addPoint(new Date(v).getTime());
+  });
+  $("pSave").addEventListener("click", saveDraft);
+  $("pAuto").addEventListener("click", restoreAuto);
+  $("sheet").addEventListener("click", e => {
+    if (e.target.dataset.close) closeSheet();
+  });
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && !$("sheet").hidden) closeSheet();
   });
 
   // ---------- 启动 ----------

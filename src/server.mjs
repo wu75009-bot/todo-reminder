@@ -674,6 +674,18 @@ async function analyze(text, { force = "auto" } = {}) {
   return { parsed: mergeModel(ruleParsed, m), engine: "model", model: m };
 }
 
+// 手机 <input type="datetime-local"> 给的是 "2026-11-11T20:00" 这种没有时区的字符串。
+// 服务器跑在 UTC，直接 Date.parse 会当成 UTC 解析，整体偏 8 小时——
+// 用户设的「晚上八点」会变成第二天凌晨四点。没带时区就按北京时间补上。
+function parsePointMs(raw) {
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  const s = String(raw == null ? "" : raw).trim();
+  if (!s) return null;
+  const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(s);
+  const at = Date.parse(hasZone ? s : s.replace(" ", "T") + "+08:00");
+  return Number.isFinite(at) ? at : null;
+}
+
 // 用户单独指定的提醒点（「八点也提醒我一次」）。这些不受规则约束，
 // 规则改了也不会把它们冲掉——它们存在任务上，和 start/end 一样是任务的一部分。
 function customReminderPoints(task) {
@@ -736,7 +748,11 @@ function rebuildReminders(task, rule) {
     else if (r.anchor !== "custom") expired.push(r);   // 自定义点过期了静默丢弃，别拿它刷日志
   }
   future.sort((a, b) => Date.parse(a.fireAt) - Date.parse(b.fireAt));
-  const fixed = ensureImmediate(task, rule, future, now);
+  // 「提前的时点都过了就现在补一嗓子」这条兜底，用户亲手把点删光时不适用：
+  // 他刚在手机上把这些提醒一个个点掉，再补一个「现在」等于没删。
+  const fixed = (!future.length && muted.size)
+    ? { list: [], added: null }
+    : ensureImmediate(task, rule, future, now);
   store.addReminders(task.id, fixed.list);
   for (const e of expired) notes.push(`「${e.anchor === "due" ? "截止" : e.anchor === "end" ? "结束" : "开始"}前 ${e.before}」的时间点已经过去了，跳过`);
   for (const s of skipped) notes.push(`没排上 ${s.anchor} 的提醒：${s.reason}`);
@@ -2495,7 +2511,7 @@ process.on("unhandledRejection", err => {
 
 // 手机端：同一套处理逻辑，但只放行白名单路由，并且每个请求都要密钥。
 // 单独开一个监听是为了不影响本机 3790 —— 那边是给自己电脑用的，不该要 token。
-const MOBILE_ALLOW = new Set(["/m", "/todo.apk", "/api/state", "/api/add", "/api/share", "/api/photo", "/api/parse", "/api/calendar.ics", "/api/calendar.json", "/api/mobile/undo"]);
+const MOBILE_ALLOW = new Set(["/m", "/todo.apk", "/api/state", "/api/add", "/api/share", "/api/photo", "/api/parse", "/api/calendar.ics", "/api/calendar.json", "/api/mobile/undo", "/api/mobile/reminders"]);
 
 async function handleRequest(req, res) {
   const url = new URL(req.url, "http://127.0.0.1");
@@ -2568,6 +2584,84 @@ async function handleRequest(req, res) {
       await store.flush();
       log("手机端恢复了任务：", task.title, `（重新排上 ${back} 个提醒）`);
       return send(res, 200, { ok: true, restored: back });
+    }
+
+    // 手机上调整提醒时间。发过来的是「我最终想要的那几个时刻」，服务端反推出
+    // 两种底层标记：规则本来不会排的点进 extraReminders（额外加），规则会排、
+    // 但用户删掉的进 mutedReminders（只压掉那一次）。
+    // 不整份覆盖任务 —— 原本自动排好的固定提醒只要用户没删就原样留着，
+    // 规则以后改了也还能继续跟进，只是那几次被点掉的不再冒出来。
+    if (req.method === "POST" && path === "/api/mobile/reminders") {
+      const body = await readBody(req);
+      const task = store.tasks.find(t => t.id === body.id);
+      if (!task) return send(res, 404, { error: "找不到这条了" });
+
+      if (body.mode === "auto") {
+        delete task.extraReminders;
+        delete task.mutedReminders;
+      } else {
+        const want = new Set();
+        for (const raw of Array.isArray(body.points) ? body.points : []) {
+          const at = parsePointMs(raw);
+          if (at !== null) want.add(at);
+        }
+
+        // 规则自己会排哪些点（不含用户手动加的）。拿它当基准，才能算出
+        // 「哪几个是用户额外要的」「哪几个是用户亲手删掉的」。
+        const auto = new Set();
+        if (task.remindOnly && task.remindAt) {
+          const at = parsePointMs(task.remindAt);
+          if (at !== null) auto.add(at);
+        } else {
+          const rule0 = ruleOf(task);
+          if (rule0) {
+            for (const r of expandReminders(task, rule0).reminders) {
+              const at = Date.parse(r.fireAt);
+              if (Number.isFinite(at)) auto.add(at);
+            }
+          }
+        }
+
+        const extra = [...want].filter(at => !auto.has(at)).sort((a, b) => a - b);
+        const muted = [...auto].filter(at => !want.has(at));
+        task.extraReminders = extra.map(at => new Date(at).toISOString());
+        task.mutedReminders = muted.map(at => new Date(at).toISOString());
+        if (!task.extraReminders.length) delete task.extraReminders;
+        if (!task.mutedReminders.length) delete task.mutedReminders;
+
+        // 「提醒我八点」这类只有单点的任务，一改就得改走 extra/muted，
+        // 否则 rebuildReminders 永远走 remindOnly 分支，把用户的改动全忽略。
+        if (task.remindOnly) {
+          delete task.remindOnly;
+          delete task.remindAt;
+          delete task.reminderText;
+        }
+      }
+
+      store.reminders = store.reminders.filter(r => r.taskId !== task.id || r.status !== "pending");
+      const rule = ruleOf(task);
+      if (rule) {
+        const built = rebuildReminders(task, rule);
+        task.notes = built.notes;
+      } else {
+        // 没有匹配规则的任务（「只发了作业」多半是这种），也要能只按用户给的点排
+        const muted = mutedSet(task);
+        const now = Date.now();
+        const list = customReminderPoints(task)
+          .filter(r => !muted.has(Date.parse(r.fireAt)) && Date.parse(r.fireAt) > now - 60_000);
+        store.addReminders(task.id, list);
+      }
+      await store.flush();
+
+      const now = Date.now();
+      const live = store.remindersOf(task.id)
+        .filter(r => r.status === "pending" && Date.parse(r.fireAt) > now - 60_000);
+      log("手机端改了提醒时间：", task.title, `（共 ${live.length} 个点）`);
+      return send(res, 200, {
+        ok: true,
+        manual: !!(task.extraReminders || task.mutedReminders),
+        reminders: live.map(r => ({ fireAt: r.fireAt }))
+      });
     }
 
     if (req.method === "GET" && path === "/api/calendar.ics") {
