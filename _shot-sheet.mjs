@@ -83,6 +83,26 @@ try {
 
   console.log("面板文本:\n" + String(await evalJs(`document.querySelector(".sheet-body").innerText`)).slice(0, 500));
 
+  // 清除按钮：输入框置空 + 标签变成「（没设）」，保存后才真正生效
+  console.log("清除前:", await evalJs(`[
+    document.getElementById("ptimeLabel").textContent,
+    JSON.stringify(document.getElementById("ptimeInput").value),
+    document.getElementById("ptimeClear").hidden
+  ].join(" | ")`));
+  await evalJs(`document.getElementById("ptimeClear").click()`);
+  console.log("清除后:", await evalJs(`[
+    document.getElementById("ptimeLabel").textContent,
+    JSON.stringify(document.getElementById("ptimeInput").value),
+    document.getElementById("ptimeClear").hidden
+  ].join(" | ")`));
+  await shot("cleared");
+  // 恢复回去，别影响后面的截图
+  await evalJs(`(() => {
+    const i = document.getElementById("ptimeInput");
+    i.value = "2026-11-12T20:00";
+    i.dispatchEvent(new Event("input"));
+  })()`);
+
   // 点一个快捷时间，再删掉第一行，看列表变化
   const act = await evalJs(`(() => {
     const q = document.querySelector("#pquick button");

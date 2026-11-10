@@ -139,10 +139,12 @@ try {
   ok(r4.parsed?.notes?.some(n => n.includes("对调")), "说明了已对调");
 
   console.log("\n--- 5. 图片直接给模型看 ---");
+  // 提到外层：第 10 组还要用同一张图，声明在 else 块里会「b64 is not defined」
+  let b64 = "";
   if (!IMG || !existsSync(IMG)) {
     console.log("  跳过：没设 TEST_IMG 环境变量，或文件不存在");
   } else {
-  const b64 = (await readFile(IMG)).toString("base64");
+  b64 = (await readFile(IMG)).toString("base64");
   const r5 = await post("/api/ocr", { dataUrl: `data:image/png;base64,${b64}` });
   ok(r5.ok === true, "图片处理成功", r5.error);
   ok(r5.engine === "model", "走的是模型直读，不是 OCR", r5.engine);
@@ -182,12 +184,16 @@ try {
   ok(c2.model?.cached === true, "第二次命中缓存", c2.model?.cached);
 
   console.log("\n--- 10. 模型连不上时，图片退回本地 OCR ---");
-  await post("/api/config", { llm: { baseUrl: "http://127.0.0.1:9", apiKey: "sk-mock-key", enabled: true } });
-  const r10 = await post("/api/ocr", { dataUrl: `data:image/png;base64,${b64}` });
-  ok(r10.ok === true, "OCR 兜住了，没让整条路断掉", r10.error);
-  ok(r10.engine === "ocr", "标记成走的本地 OCR", r10.engine);
-  ok((r10.text || "").length > 5, "取到了文字", (r10.text || "").length);
-  ok(r10.model?.ok === false, "同时如实报告了模型失败");
+  if (!b64) {
+    console.log("  跳过：第 5 步没有图可用");
+  } else {
+    await post("/api/config", { llm: { baseUrl: "http://127.0.0.1:9", apiKey: "sk-mock-key", enabled: true } });
+    const r10 = await post("/api/ocr", { dataUrl: `data:image/png;base64,${b64}` });
+    ok(r10.ok === true, "OCR 兜住了，没让整条路断掉", r10.error);
+    ok(r10.engine === "ocr", "标记成走的本地 OCR", r10.engine);
+    ok((r10.text || "").length > 5, "取到了文字", (r10.text || "").length);
+    ok(r10.model?.ok === false, "同时如实报告了模型失败");
+  }
 } catch (err) {
   fail++;
   console.log("\n测试崩了：" + err.message);

@@ -212,6 +212,29 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
 
+  /* 任务自己的时间（开始/截止）。它决定规则怎么排提醒、什么时候算过期，
+     所以放在提醒点上面，可以改也可以清掉。 */
+  .tblock {
+    background: var(--card); border-radius: 12px;
+    padding: 12px 12px 12px 14px; box-shadow: var(--shadow); margin-bottom: 18px;
+  }
+  .tlabel {
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 13px; color: var(--muted); margin-bottom: 8px;
+  }
+  .tclear {
+    font-size: 12.5px; padding: 4px 10px; min-height: 26px; border-radius: 7px;
+    background: color-mix(in srgb, var(--danger) 10%, transparent); color: var(--danger);
+  }
+  .tclear[hidden] { display: none; }
+  .tblock input[type="datetime-local"] {
+    width: 100%; font-size: 15px; font-family: inherit;
+    padding: 10px 12px; border-radius: 10px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--text);
+    -webkit-appearance: none; appearance: none;
+  }
+  .plist-head { font-size: 12.5px; color: var(--muted); margin: 0 2px 8px; letter-spacing: .3px; }
+
   .plist { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
   .plist .none { font-size: 13.5px; color: var(--muted); padding: 10px 0; text-align: center; }
   .prow {
@@ -325,6 +348,16 @@
   <div class="sheet-body">
     <h3>什么时候提醒你</h3>
     <div class="who" id="sheetWho"></div>
+
+    <div class="tblock">
+      <div class="tlabel">
+        <span id="ptimeLabel">截止时间</span>
+        <button class="tclear" id="ptimeClear" hidden>清除</button>
+      </div>
+      <input type="datetime-local" id="ptimeInput">
+    </div>
+
+    <div class="plist-head">提醒时间</div>
     <div class="plist" id="plist"></div>
     <div class="pquick" id="pquick"></div>
     <div class="padd">
@@ -656,6 +689,8 @@
   // 所以什么都不动就保存 = 原样保留，原有的固定提醒一个都不会丢。
   let sheetId = "";
   let draft = [];
+  let timeKey = "due";      // 有开始时间就改 start，否则改 due
+  let origTimeVal = "";     // 打开面板时的原值，没改就不提交，免得白白重写一遍
 
   function dtValue(ms) {
     const d = new Date(ms);
@@ -694,6 +729,18 @@
     )].sort((a, b) => a - b);
 
     $("sheetWho").textContent = task.title || "(没写标题)";
+
+    // 任务自己的时间。考试/会议改「开始」，作业/报名改「截止」——
+    // 解析错的时候（比如题号被当成 3:03）这里是唯一能纠正的地方。
+    timeKey = (task.start && !task.due) ? "start" : "due";
+    const own = task.start || task.due || "";
+    const ownMs = own ? Date.parse(own) : NaN;
+    origTimeVal = Number.isFinite(ownMs) ? dtValue(ownMs) : "";
+    $("ptimeLabel").textContent = (timeKey === "start" ? "开始时间" : "截止时间")
+      + (origTimeVal ? "" : "（没设）");
+    $("ptimeInput").value = origTimeVal;
+    $("ptimeClear").hidden = !origTimeVal;
+
     // 没有规则的任务点「按规则自动排」等于清空，这个按钮别给
     $("pAuto").hidden = !task.ruleFile;
     // 输入框预填「明天 20:00」：作业、通知类的提醒多半落在这个点，
@@ -738,14 +785,26 @@
     btn.disabled = true;
     btn.textContent = "保存中";
     try {
-      await api("/api/mobile/reminders", {
-        method: "POST",
-        body: JSON.stringify({ id: sheetId, points: draft.map(ms => new Date(ms).toISOString()) })
-      });
-      const n = draft.length;
+      const tv = $("ptimeInput").value;
+      const timeChanged = tv !== origTimeVal;
+      const body = { id: sheetId };
+      if (timeChanged) {
+        // 时间一变，列表里那些旧提醒点就过时了（它们全是围着老时间算的）。
+        // 这时候不能把旧点提交回去 —— 服务端会当成「用户就想要这些时刻」，
+        // 结果新时间配旧提醒，等于白改。交给服务端按新时间重排，
+        // 用户自己加的点存在任务上，不会丢。
+        body.time = tv ? { key: timeKey, at: new Date(tv).toISOString() } : null;
+      } else {
+        body.points = draft.map(ms => new Date(ms).toISOString());
+      }
+      await api("/api/mobile/reminders", { method: "POST", body: JSON.stringify(body) });
       closeSheet();
       await refresh();
-      toast(n ? "改好了，会在这些时候叫你" : "提醒都清掉了，这条不会再叫你");
+      if (timeChanged) {
+        toast("时间改好了，提醒按新时间重排");
+      } else {
+        toast(draft.length ? "改好了，会在这些时候叫你" : "提醒都清掉了，这条不会再叫你");
+      }
     } catch (e) {
       if (e.message !== "unauthorized") toast("没保存上：" + e.message);
     } finally {
@@ -836,6 +895,19 @@
   });
   $("pSave").addEventListener("click", saveDraft);
   $("pAuto").addEventListener("click", restoreAuto);
+
+  // 清掉任务时间：输入框留空，保存时才真正生效
+  function syncTimeLabel() {
+    const empty = !$("ptimeInput").value;
+    $("ptimeClear").hidden = empty;
+    $("ptimeLabel").textContent = (timeKey === "start" ? "开始时间" : "截止时间")
+      + (empty ? "（没设）" : "");
+  }
+  $("ptimeClear").addEventListener("click", () => {
+    $("ptimeInput").value = "";
+    syncTimeLabel();
+  });
+  $("ptimeInput").addEventListener("input", syncTimeLabel);
   $("sheet").addEventListener("click", e => {
     if (e.target.dataset.close) closeSheet();
   });

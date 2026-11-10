@@ -2596,10 +2596,42 @@ async function handleRequest(req, res) {
       const task = store.tasks.find(t => t.id === body.id);
       if (!task) return send(res, 404, { error: "找不到这条了" });
 
+      // 任务自己的时间（开始/截止）。这个必须先改：
+      // 规则排出来的所有提醒都是围着它算的，而且「什么时候算过期」也看它。
+      // 作业只发个「习题三：3」，解析器容易凭空造一个凌晨的时间，得让用户能纠正。
+      let timeChanged = false;
+      if ("time" in body) {
+        if (!body.time) {
+          delete task.start;
+          delete task.due;
+          delete task.end;
+        } else {
+          const at = parsePointMs(body.time.at);
+          if (at === null) return send(res, 400, { error: "这个时间没看懂" });
+          const key = body.time.key === "start" ? "start" : "due";
+          task[key] = new Date(at).toISOString();
+          delete task[key === "start" ? "due" : "start"];
+          // 结束时间跟着走：有考试时长就按时长重算，没有就别留一个对不上的旧值
+          if (task.end) {
+            const dur = Number(task.durationMinutes);
+            if (Number.isFinite(dur) && dur > 0 && key === "start") {
+              task.end = new Date(at + dur * 60000).toISOString();
+            } else {
+              delete task.end;
+            }
+          }
+        }
+        // 时间变了，之前「原文只给了时刻，已按今天/明天推断」这类提示就没意义了
+        task.notes = (task.notes || []).filter(n => !/推断|核对/.test(String(n)));
+        timeChanged = true;
+      }
+
       if (body.mode === "auto") {
         delete task.extraReminders;
         delete task.mutedReminders;
-      } else {
+      } else if (Array.isArray(body.points)) {
+        // 只在真的带了点列表时才动提醒。只改任务时间的话 points 不传，
+        // 否则会把这边的空数组当成「一个点都不要」，把提醒全静音掉。
         const want = new Set();
         for (const raw of Array.isArray(body.points) ? body.points : []) {
           const at = parsePointMs(raw);

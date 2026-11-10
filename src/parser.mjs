@@ -159,22 +159,32 @@ function scanDates(text, now) {
   // 5. 时刻 23:59 / 下午3点 / 下午两点半 / 晚上八点
   //    小时和分钟都可能是中文数字。以前只认阿拉伯数字，「下午两点」认不出来会掉到
   //    默认的 9:00，等于把下午的会议记成了早上 —— 这个错必须堵住。
+  //
+  //    但「冒号」这条特别容易误伤：作业文本「习题三：3，4，8，9，11，12」里
+  //    的「三：3」会被读成 3 点 03 分，凭空造出一个凌晨的截止时间，
+  //    然后各种「截止前 N 天」的提醒全排到过去，整条任务等于废掉。
+  //    所以拆成两条，各自的松紧不一样：
+  //      · 冒号写法必须「阿拉伯小时 + 两位分钟」（3:03 / 23:59），题号凑不出来；
+  //      · 「点」字写法才允许中文数字和单/双位分钟（三点半 / 下午两点）。
   const CN_H = "零一二三四五六七八九十两";
-  const reTime = new RegExp(
-    `(凌晨|早上|上午|中午|下午|傍晚|晚上)?\\s*(\\d{1,2}|[${CN_H}]{1,3})\\s*[:点]\\s*(\\d{1,2}|半|[${CN_H}]{1,3})?\\s*分?`,
+  const toNum = v => (/^\d+$/.test(v) ? +v : cnNumber(v));
+  const reColon = /(凌晨|早上|上午|中午|下午|傍晚|晚上)?\s*(\d{1,2})\s*[:：]\s*(\d{2})(?!\d)/g;
+  const reDot = new RegExp(
+    `(凌晨|早上|上午|中午|下午|傍晚|晚上)?\\s*(\\d{1,2}|[${CN_H}]{1,3})\\s*点\\s*(半|\\d{1,2}|[${CN_H}]{1,3})?\\s*分?`,
     "g"
   );
-  const toNum = v => (/^\d+$/.test(v) ? +v : cnNumber(v));
   const timeMarks = [];
-  for (const m of text.matchAll(reTime)) {
+  const addTimeMark = (m, hhRaw, mmRaw) => {
     const [s] = m;
-    if (!free(m.index, s.length)) continue;
-    const rawHh = toNum(m[2]);
-    const mm = m[3] === "半" ? 30 : (m[3] ? toNum(m[3]) : 0);
-    if (!Number.isFinite(rawHh) || !Number.isFinite(mm) || rawHh > 24 || mm > 59) continue;
+    if (!free(m.index, s.length)) return;
+    const rawHh = toNum(hhRaw);
+    const mm = mmRaw === "半" ? 30 : (mmRaw ? toNum(mmRaw) : 0);
+    if (!Number.isFinite(rawHh) || !Number.isFinite(mm) || rawHh > 24 || mm > 59) return;
     timeMarks.push({ at: m.index, len: s.length, rawHh, mm, period: m[1] || null });
     mark(m.index, s.length);
-  }
+  };
+  for (const m of text.matchAll(reColon)) addTimeMark(m, m[2], m[3]);
+  for (const m of text.matchAll(reDot)) addTimeMark(m, m[2], m[3]);
 
   // 「下午三点到五点」—— 后面那个常常不写上午/下午，得跟着前面那个走。
   // 不继承的话「五点」会被当成早上五点，整段时间就错了。

@@ -32,6 +32,13 @@ async function auto(id) {
   });
   return { code: r.status, body: await r.json().catch(() => ({})) };
 }
+// 只改任务自己的时间（开始/截止），不带提醒点
+async function setTime(id, time) {
+  const r = await fetch(BASE + "/api/mobile/reminders", {
+    method: "POST", headers: H, body: JSON.stringify({ id, time })
+  });
+  return { code: r.status, body: await r.json().catch(() => ({})) };
+}
 const iso = ms => new Date(ms).toISOString();
 // fireAt 是 ISO 字符串，跟数字直接比等于 NaN，必须解析
 const live = t => (t.reminders || [])
@@ -122,6 +129,39 @@ const noToken = await fetch(BASE + "/api/mobile/reminders", {
   method: "POST", headers: { "Content-Type": "application/json" }, body: "{}"
 });
 ok(noToken.status === 401, "没密钥 → 401", noToken.status);
+
+console.log("\n[8] 改任务自己的时间（解析错的时候靠它纠正）");
+r = await setTime(RULE_ID, { key: "start", at: "2026-11-20T20:00" });
+ok(r.code === 200, "接口返回 200", r.body);
+t = await taskOf(RULE_ID);
+ok(t.start === "2026-11-20T12:00:00.000Z", "开始时间落成 11-20 20:00（+08:00）", t.start);
+ok(!t.due, "原来的截止被清掉，两个时间不会打架", t.due);
+
+console.log("\n[9] 只改时间：规则按新时间重排，用户自己加的点不丢");
+await setPoints(Hw, [iso(tomorrow20)]);
+const keepPts = live(await taskOf(Hw));
+ok(keepPts.length === 1, "先有 1 个点（用户加的）", keepPts);
+r = await setTime(Hw, { key: "due", at: "2026-11-25T18:00" });
+t = await taskOf(Hw);
+ok(t.due === "2026-11-25T10:00:00.000Z", "截止改好了", t.due);
+ok(live(t).includes(keepPts[0]), "用户自己加的那个点还在", live(t));
+// 有截止之后任务才算"有时可依"，规则开始正常排点，这是预期行为
+ok(live(t).length > keepPts.length, "顺带按规则排了新点", live(t).length);
+
+console.log("\n[10] 清除时间");
+r = await setTime(Hw, null);
+ok(r.code === 200, "接口返回 200", r.body);
+t = await taskOf(Hw);
+ok(!t.start && !t.due, "开始/截止都清了", { s: t.start, d: t.due });
+
+console.log("\n[11] 题号里的「三：3」不该被当成时间");
+const added = await (await fetch(BASE + "/api/add", {
+  method: "POST", headers: H,
+  body: JSON.stringify({ text: "作业，习题三：3，4，8，9，11，12", source: "测试" })
+})).json();
+ok(!!added.task, "任务建出来了", added.error);
+ok(!added.task?.due && !added.task?.start,
+  "没有凭空造出截止时间", { start: added.task?.start, due: added.task?.due });
 
 console.log("\n结果：" + pass + " 通过，" + fail + " 失败\n");
 process.exit(fail ? 1 : 0);
