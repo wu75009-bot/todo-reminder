@@ -374,8 +374,10 @@ function calendarEvents(days = 14) {
 
   for (const [key, { task, fires }] of groups) {
     // 日程定在事情本身的时间上（开始 / 截止），提醒点只是它的闹钟。
+    // 但事情的时间要是已经过去了、提醒还在未来（手机上手动改过提醒点），
+    // 往日历里写一个过期事件没意义 —— 这种按最近的那个提醒点算。
     const anchor = Date.parse(task?.start || task?.due || task?.end || "");
-    const at = Number.isFinite(anchor) ? anchor : Math.min(...fires);
+    const at = Number.isFinite(anchor) && anchor > now ? anchor : Math.min(...fires);
 
     const alarms = [...new Set(fires.map(f => Math.round((at - f) / 60000)))]
       .filter(m => Math.abs(m) <= 60 * 24 * 30)

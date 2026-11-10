@@ -294,6 +294,26 @@
   .sheet-actions .auto { background: transparent; color: var(--muted); border: 1px solid var(--line); }
   .sheet-actions .auto[disabled] { opacity: .4; }
 
+  /* 同步日历前的确认。往系统日历里写东西是有副作用的操作，
+     点一下就闷头写进去不太礼貌 —— 先把要写什么摆出来给人看。 */
+  #calWho {
+    white-space: normal; overflow: visible; text-overflow: clip;
+    line-height: 1.55; margin-bottom: 10px;
+  }
+  .callist { margin: 0 0 4px; max-height: 44vh; overflow-y: auto; }
+  .calrow {
+    display: flex; gap: 10px; align-items: baseline;
+    padding: 9px 0; border-top: 1px solid var(--line);
+  }
+  .calrow:first-child { border-top: 0; }
+  .calrow .t { flex: 1; min-width: 0; font-size: 14.5px; line-height: 1.35; }
+  .calrow .t small { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .calrow .when {
+    font-size: 12.5px; color: var(--muted);
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .calmore { font-size: 12.5px; color: var(--muted); padding: 8px 0 0; }
+
   .toast {
     position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 22px);
     transform: translate(-50%, 12px);
@@ -394,6 +414,20 @@
     <div class="sheet-actions">
       <button class="auto" id="pAuto">按规则自动排</button>
       <button id="pSave">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 同步日历前先确认：把要写进去的日程摆出来，别点一下就往系统日历里灌 -->
+<div class="sheet" id="calSheet" hidden>
+  <div class="sheet-mask" data-cal-close="1"></div>
+  <div class="sheet-body">
+    <h3 id="calTitle">同步到手机日历</h3>
+    <div class="who" id="calWho"></div>
+    <div class="callist" id="calList"></div>
+    <div class="sheet-actions">
+      <button class="auto" id="calCancel">取消</button>
+      <button id="calGo">写进日历</button>
     </div>
   </div>
 </div>
@@ -963,15 +997,68 @@
     $("btnReload").classList.add("spin");
     hardReload();
   });
-  $("icsLink").addEventListener("click", e => {
-    e.preventDefault();
-    // 在 App 里：让它直接往系统日历写事件（手机浏览器那条 .ics 基本没人认）
-    if (window.TodoApp && typeof window.TodoApp.syncCalendar === "function") {
-      window.TodoApp.syncCalendar();
+  // ---------- 同步到手机日历 ----------
+  // 以前点一下就直接往系统日历里写，写完才发现写歪了也没处反悔。
+  // 现在先把要写的日程摆出来，确认了再动手。
+  const inApp = () => window.TodoApp && typeof window.TodoApp.syncCalendar === "function";
+
+  function closeCal() {
+    $("calSheet").hidden = true;
+  }
+
+  async function openCal() {
+    let ev = [];
+    try {
+      ev = (await api("/api/calendar.json?days=60")).events || [];
+    } catch (e) {
+      if (e.message !== "unauthorized") toast("读不到日程：" + e.message);
+      return;
+    }
+    if (!ev.length) {
+      toast("最近 60 天没有要写进日历的日程");
+      return;
+    }
+
+    const app = inApp();
+    $("calTitle").textContent = app ? "同步到手机日历" : "导出日历文件";
+    $("calWho").textContent = app
+      ? "共 " + ev.length + " 条，写进系统日历并带上提醒时间。重复点不会叠加，同一条会先删旧的再写。"
+      : "浏览器里拿不到日历权限，会下载一个 .ics 文件，用日历 App 打开导入。";
+    $("calGo").textContent = app ? "写进日历" : "下载文件";
+
+    // 全都列出来会很长，超过 30 条就折一下，但数量照实说
+    const MAX = 30;
+    $("calList").innerHTML = ev.slice(0, MAX).map(e => {
+      const at = Number(e.at);
+      const n = (e.alarms || []).length;
+      return '<div class="calrow"><div class="t">' + esc(e.title || "提醒")
+        + (n ? "<small>带 " + n + " 个提醒</small>" : "")
+        + '</div><div class="when">'
+        + (Number.isFinite(at) ? esc(timeLabel(at)) : "时间未定") + "</div></div>";
+    }).join("") + (ev.length > MAX
+      ? '<div class="calmore">还有 ' + (ev.length - MAX) + " 条，一并在内</div>"
+      : "");
+
+    $("calSheet").hidden = false;
+  }
+
+  $("calCancel").addEventListener("click", closeCal);
+  $("calSheet").addEventListener("click", e => {
+    if (e.target.dataset && e.target.dataset.calClose) closeCal();
+  });
+  $("calGo").addEventListener("click", () => {
+    closeCal();
+    if (inApp()) {
       toast("正在写进手机日历…");
+      window.TodoApp.syncCalendar();
       return;
     }
     location.href = "/api/calendar.ics?days=60&t=" + encodeURIComponent(token);
+  });
+
+  $("icsLink").addEventListener("click", e => {
+    e.preventDefault();
+    openCal();
   });
 
   // 时间面板
