@@ -27,3 +27,9 @@ Thumbs.db
 .env
 .env.local
 android/build/
+android/*.apk
+android/*.idsig
+_shotm-*.png
+android/*.apk
+android/*.idsig
+_shotm-*.png
