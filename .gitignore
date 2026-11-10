@@ -21,9 +21,7 @@ android/*.apk
 android/*.idsig
 
 # 截图脚本的产物
-_shotm-*.png
-_shotsheet-*.png
-_shotpull.png
+_shot*.png
 
 # ===== 依赖与系统文件 =====
 node_modules/
