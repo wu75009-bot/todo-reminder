@@ -2,8 +2,11 @@ package cn.todoreminder.app;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.Manifest;
 import android.content.ContentValues;
+import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
@@ -13,6 +16,7 @@ import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
@@ -33,6 +37,7 @@ import android.widget.Toast;
 public class MainActivity extends Activity {
 
     private static final int REQ_FILE = 1001;
+    private static final int REQ_CAL = 1002;
 
     private WebView web;
     private ValueCallback<Uri[]> pending;
@@ -81,6 +86,61 @@ public class MainActivity extends Activity {
         });
 
         web.loadUrl(Cfg.url(this));
+        web.addJavascriptInterface(new Bridge(), "TodoApp");
+    }
+
+    /**
+     * 页面里点「同步到手机日历」会调到这儿。
+     * 走原生是因为只有原生拿得到日历权限 —— 网页里那条 .ics 链接在安卓上等于死链。
+     */
+    public class Bridge {
+        @JavascriptInterface
+        public void syncCalendar() {
+            runOnUiThread(() -> {
+                if (checkSelfPermission(Manifest.permission.WRITE_CALENDAR)
+                        != PackageManager.PERMISSION_GRANTED) {
+                    requestPermissions(new String[]{
+                            Manifest.permission.WRITE_CALENDAR,
+                            Manifest.permission.READ_CALENDAR}, REQ_CAL);
+                } else {
+                    doSyncCalendar();
+                }
+            });
+        }
+    }
+
+    private void doSyncCalendar() {
+        Toast.makeText(this, "正在写进手机日历…", Toast.LENGTH_SHORT).show();
+        final Context ctx = this;
+        new Thread(() -> {
+            String msg;
+            try {
+                long calId = Cal.writableCalendar(ctx);
+                if (calId < 0) {
+                    msg = "手机里没有可写的日历，先在日历 App 里建一个「本地日历」";
+                } else {
+                    String json = Net.get(ctx, "/api/calendar.json?days=60");
+                    int n = Cal.sync(ctx, calId, json);
+                    msg = n > 0 ? "已写进手机日历：" + n + " 条，提醒也会响" : "没有需要同步的日程";
+                }
+            } catch (Exception e) {
+                String m = e.getMessage();
+                msg = "同步失败：" + (m == null || m.trim().isEmpty() ? e.getClass().getSimpleName() : m);
+            }
+            final String out = msg;
+            runOnUiThread(() -> Toast.makeText(this, out, Toast.LENGTH_LONG).show());
+        }).start();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int req, String[] perms, int[] res) {
+        super.onRequestPermissionsResult(req, perms, res);
+        if (req != REQ_CAL) return;
+        if (res.length > 0 && res[0] == PackageManager.PERMISSION_GRANTED) {
+            doSyncCalendar();
+        } else {
+            Toast.makeText(this, "没给日历权限，写不进去", Toast.LENGTH_LONG).show();
+        }
     }
 
     /** 页面自报 401（链接里 token 过期）时，让它就地换一条，不必重装。 */

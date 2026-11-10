@@ -244,6 +244,12 @@ if (config.cloud?.enabled) {
 }
 
 function send(res, code, body, type = "application/json; charset=utf-8") {
+  // 已经回过一次就别再写了。以前 res.end() 的返回值被当成"没拦住"，
+  // 又走了一遍 send，Node 直接抛 ERR_HTTP_HEADERS_SENT 把整个进程带走。
+  if (res.headersSent || res.writableEnded) {
+    log("重复响应已忽略：", code, res.req?.url || "");
+    return;
+  }
   res.writeHead(code, { "content-type": type, "cache-control": "no-store" });
   if (typeof body === "string") return res.end(body);
   if (Buffer.isBuffer(body)) return res.end(body);
@@ -2477,9 +2483,19 @@ function stateSnapshot() {
 
 const server = http.createServer(handleRequest);
 
+// 最后一道保险。这是个自用服务，跑在手机背后的唯一的进程上：
+// 一个随手写错的分支把它带走，用户那边就是"网页打不开"，而且没有任何提示。
+// 记下来、继续跑，比干净地退出有用得多。
+process.on("uncaughtException", err => {
+  log("未捕获异常（服务继续跑）：", err?.stack || err?.message || err);
+});
+process.on("unhandledRejection", err => {
+  log("未处理的 Promise 拒绝（服务继续跑）：", err?.stack || err?.message || err);
+});
+
 // 手机端：同一套处理逻辑，但只放行白名单路由，并且每个请求都要密钥。
 // 单独开一个监听是为了不影响本机 3790 —— 那边是给自己电脑用的，不该要 token。
-const MOBILE_ALLOW = new Set(["/m", "/todo.apk", "/api/state", "/api/add", "/api/share", "/api/photo", "/api/parse", "/api/calendar.ics"]);
+const MOBILE_ALLOW = new Set(["/m", "/todo.apk", "/api/state", "/api/add", "/api/share", "/api/photo", "/api/parse", "/api/calendar.ics", "/api/calendar.json", "/api/mobile/undo"]);
 
 async function handleRequest(req, res) {
   const url = new URL(req.url, "http://127.0.0.1");
@@ -2535,6 +2551,25 @@ async function handleRequest(req, res) {
       return send(res, 200, { ok: true });
     }
 
+    // 点错了要能退回来。完成时只是把提醒「静音」而不是删掉，
+    // 所以恢复就是把还没过的那些重新点亮 —— 时间点保持原样，不用重算规则。
+    if (req.method === "POST" && path === "/api/mobile/undo") {
+      const { id } = await readBody(req);
+      const task = store.tasks.find(t => t.id === id);
+      if (!task) return send(res, 404, { error: "找不到这条了" });
+      task.done = false;
+      delete task.doneAt;
+      const now = Date.now();
+      let back = 0;
+      for (const r of store.reminders) {
+        if (r.taskId !== id || r.status !== "muted") continue;
+        if (Date.parse(r.fireAt) > now) { r.status = "pending"; back++; }
+      }
+      await store.flush();
+      log("手机端恢复了任务：", task.title, `（重新排上 ${back} 个提醒）`);
+      return send(res, 200, { ok: true, restored: back });
+    }
+
     if (req.method === "GET" && path === "/api/calendar.ics") {
       const url = new URL(req.url, "http://127.0.0.1");
       const days = Math.min(60, Math.max(1, Number(url.searchParams.get("days")) || 14));
@@ -2545,6 +2580,24 @@ async function handleRequest(req, res) {
         "cache-control": "no-store"
       });
       return res.end(ics);
+    }
+
+    // 同样的日历内容，但给 App 用的 JSON。
+    // 手机上那条 .ics 链接基本等于没用：安卓系统日历不认 http://IP:6099 这种订阅，
+    // 多数机型也没有"导入 ics"的入口。App 拿着这份数据直接往系统日历里写事件，
+    // 才是"手机日历里真能看到"的做法。
+    if (req.method === "GET" && path === "/api/calendar.json") {
+      const url = new URL(req.url, "http://127.0.0.1");
+      const days = Math.min(60, Math.max(1, Number(url.searchParams.get("days")) || 60));
+      const events = calendarEvents(days).map(e => ({
+        uid: e.uid,
+        title: e.title,
+        body: e.body || "",
+        at: e.at,
+        end: e.end || null,
+        alarms: e.alarms || []
+      }));
+      return send(res, 200, { events });
     }
 
     // 把日历直接发到手机 QQ，省得用户自己去翻文件
@@ -2858,7 +2911,7 @@ function guardMobile(req, res) {
     if (hits.size > 400) hits.clear();
     const ip = req.socket.remoteAddress || "?";
     hits.set(ip, (hits.get(ip) || 0) + 1);
-    if (hits.get(ip) > 20) { res.writeHead(429); return res.end("too many"); }
+    if (hits.get(ip) > 20) { res.writeHead(429); res.end("too many"); return false; }
     send(res, 401, { error: "链接无效" });
     return false;
   }
@@ -2928,9 +2981,16 @@ server.listen(PORT, "127.0.0.1", () => {
     const mport = Number(process.env.TODO_MOBILE_PORT || config.mobile.port || 6099);
     const mobileServer = http.createServer((req, res) => {
       const p = new URL(req.url, "http://127.0.0.1").pathname;
-      if (!guardMobile(req, res)) return;
-      if (!allowMobile(p)) return send(res, 404, { error: "没有这个接口" });
-      handleRequest(req, res);
+      try {
+        if (!guardMobile(req, res)) return;
+        if (!allowMobile(p)) return send(res, 404, { error: "没有这个接口" });
+        handleRequest(req, res);
+      } catch (err) {
+        // 单个请求出岔子只能坏这一个请求，不能让整个服务倒下去 ——
+        // 手机那边看到的就是"网页无法打开"，而我这边只收到一条重启记录。
+        log("手机端请求出错：", p, err.message);
+        send(res, 500, { error: err.message });
+      }
     });
     mobileServer.on("error", err => log(`手机端监听 ${mport} 失败：`, err.message));
     mobileServer.listen(mport, "0.0.0.0", () => {

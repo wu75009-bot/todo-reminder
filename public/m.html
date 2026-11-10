@@ -165,6 +165,20 @@
 
   .empty { color: var(--muted); font-size: 14px; text-align: center; padding: 26px 0; }
 
+  /* 已完成：收起来是一行标题，展开才占地方 */
+  .done-head { cursor: pointer; -webkit-user-select: none; user-select: none; }
+  .done-head .caret {
+    display: inline-block; font-size: 11px; margin-right: 2px;
+    color: var(--muted); transition: transform .15s;
+  }
+  .done-head.open .caret { transform: rotate(90deg); }
+  .task.done { opacity: .62; }
+  .task.done .t { color: var(--muted); }
+  .task .actions .undo {
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    color: var(--accent);
+  }
+
   footer { margin-top: 26px; font-size: 12px; color: var(--muted); text-align: center; line-height: 1.8; }
   footer a { color: var(--muted); }
   footer .tip { margin-top: 14px; padding: 8px 12px; border: 1px dashed var(--line); border-radius: 10px; }
@@ -218,9 +232,18 @@
       <div id="tasks"><div class="empty">还没有待办</div></div>
     </div>
 
+    <!-- 点完成不该等于消失。默认收起来，免得占着一屏，但一眼能看到有几条 -->
+    <div class="section" id="doneSection" hidden>
+      <div class="head done-head" id="doneHead">
+        <h2><span class="caret">▸</span> 已完成</h2>
+        <span class="count" id="doneCount"></span>
+      </div>
+      <div id="doneBox" hidden></div>
+    </div>
+
     <footer>
-      提醒会发到邮箱，也可以订阅日历<br>
-      <a href="#" id="icsLink">添加到手机日历</a>
+      提醒会发到邮箱<br>
+      <a href="#" id="icsLink">同步到手机日历</a>
       <div class="tip" id="tip">把这页加到主屏幕，下次点图标就能直接记，不用再找链接</div>
     </footer>
   </div>
@@ -299,7 +322,8 @@
 
   function render() {
     if (!state) return;
-    const tasks = (state.tasks || []).filter(t => !t.done);
+    const all = state.tasks || [];
+    const tasks = all.filter(t => !t.done);
     const now = Date.now();
 
     // 顶部副标题：今天几号
@@ -310,6 +334,7 @@
     if (!tasks.length) {
       $("count").textContent = "";
       box.innerHTML = '<div class="empty">还没有待办</div>';
+      renderDone(all, now);
       return;
     }
 
@@ -338,6 +363,29 @@
         + gone.map(t => card(t, now, true)).join("");
     }
     box.innerHTML = html;
+    renderDone(all, now);
+  }
+
+  // 完成的不是删掉：留着是想知道"这件事我确实做过了"，顺手点错也能捞回来。
+  function renderDone(all, now) {
+    const list = all.filter(t => t.done);
+    const sec = $("doneSection");
+    if (!list.length) { sec.hidden = true; return; }
+    sec.hidden = false;
+    $("doneCount").textContent = list.length + " 件";
+    list.sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0));
+    $("doneBox").innerHTML = list.map(doneCard).join("");
+    void now;
+  }
+
+  function doneCard(t) {
+    const at = t.doneAt ? timeLabel(t.doneAt) + " 完成" : "已完成";
+    return ''
+      + '<div class="task done" data-id="' + t.id + '">'
+      +   '<div class="t">' + esc(t.title || "(没写标题)") + "</div>"
+      +   '<div class="meta">' + at + "</div>"
+      +   '<div class="actions"><button class="undo" data-act="undo">恢复</button></div>'
+      + "</div>";
   }
 
   function anchorOf(t) {
@@ -498,8 +546,10 @@
 
   async function act(id, what) {
     try {
-      await api("/api/mobile/" + what, { method: "POST", body: JSON.stringify({ id }) });
-      toast(what === "done" ? "已标记完成" : "已删除");
+      const r = await api("/api/mobile/" + what, { method: "POST", body: JSON.stringify({ id }) });
+      toast(what === "done" ? "已标记完成，在下面「已完成」里"
+        : what === "undo" ? (r.restored ? "恢复了，重新排上 " + r.restored + " 个提醒" : "恢复了")
+        : "已删除");
       await refresh();
     } catch (e) {
       if (e.message !== "unauthorized") toast("操作失败：" + e.message);
@@ -523,14 +573,27 @@
     // 桌面调试用；手机上回车是换行
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); addTask(); }
   });
-  $("tasks").addEventListener("click", e => {
+  const onCardTap = e => {
     const btn = e.target.closest("button[data-act]");
     if (!btn) return;
     const id = btn.closest(".task").dataset.id;
     act(id, btn.dataset.act);
+  };
+  $("tasks").addEventListener("click", onCardTap);
+  $("doneBox").addEventListener("click", onCardTap);
+  $("doneHead").addEventListener("click", () => {
+    const box = $("doneBox");
+    box.hidden = !box.hidden;
+    $("doneHead").classList.toggle("open", !box.hidden);
   });
   $("icsLink").addEventListener("click", e => {
     e.preventDefault();
+    // 在 App 里：让它直接往系统日历写事件（手机浏览器那条 .ics 基本没人认）
+    if (window.TodoApp && typeof window.TodoApp.syncCalendar === "function") {
+      window.TodoApp.syncCalendar();
+      toast("正在写进手机日历…");
+      return;
+    }
     location.href = "/api/calendar.ics?days=60&t=" + encodeURIComponent(token);
   });
 
