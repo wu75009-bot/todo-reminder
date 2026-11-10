@@ -1,9 +1,0 @@
-build/classes/cn/todoreminder/app/Cfg.class
-build/classes/cn/todoreminder/app/MainActivity$1.class
-build/classes/cn/todoreminder/app/MainActivity$2.class
-build/classes/cn/todoreminder/app/MainActivity.class
-build/classes/cn/todoreminder/app/Net.class
-build/classes/cn/todoreminder/app/R$drawable.class
-build/classes/cn/todoreminder/app/R$string.class
-build/classes/cn/todoreminder/app/R.class
-build/classes/cn/todoreminder/app/ShareActivity.class

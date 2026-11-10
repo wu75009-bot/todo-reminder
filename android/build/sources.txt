@@ -1,5 +1,0 @@
-app/src/cn/todoreminder/app/Cfg.java
-app/src/cn/todoreminder/app/MainActivity.java
-app/src/cn/todoreminder/app/Net.java
-app/src/cn/todoreminder/app/ShareActivity.java
-build/gen/cn/todoreminder/app/R.java
