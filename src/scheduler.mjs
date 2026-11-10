@@ -67,8 +67,12 @@ export class Scheduler {
       const qq = sent?.qq ?? "-";
       const webhook = sent?.webhook ?? "-";
       const toastOk = sent?.toast ?? false;
-      const okCount = [qq === "ok", webhook === "ok", toastOk].filter(Boolean).length;
-      const detail = { sentAt: new Date().toISOString(), late, qq, webhook };
+      // 邮件兜底也算「发出去了」。漏掉这一项会出事：QQ 掉线时邮件明明发成功，
+      // 却被判成「所有通道都没发出去」→ 触发重试 → 每重试一次就多发一封邮件，
+      // 用户收到三条一模一样的提醒（2026-11-07 19:00 实测踩到）。
+      const mail = sent?.mail ?? "-";
+      const okCount = [qq === "ok", webhook === "ok", toastOk, mail === "ok"].filter(Boolean).length;
+      const detail = { sentAt: new Date().toISOString(), late, qq, webhook, mail };
       if (okCount === 0) {
         // 一条都没出去，说明是网络/接口抖动，留着再试；连着 3 次都不行才认输
         const attempts = (reminder.attempts || 0) + 1;
