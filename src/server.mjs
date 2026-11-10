@@ -67,6 +67,10 @@ const CLOUD_DEFAULTS = { enabled: false, url: "", token: "", days: 7 };
 // 掉线告警：NapCat 掉线时 QQ 这条路本身就是断的，所以走邮件这条独立通道。
 const ALERT_SMTP_DEFAULTS = { host: "smtp.qq.com", port: 465, user: "", pass: "", to: "" };
 const ALERT_DEFAULTS = { enabled: false, offlineMinutes: 10, notifyOnRecover: true, smtp: { ...ALERT_SMTP_DEFAULTS } };
+// 手机端入口。QQ 那条路 2026-11 被风控彻底堵死之后，这是替代方案：
+// 手机浏览器打开一个带密钥的链接，就是全部入口，不依赖任何第三方账号。
+// 必须带 token，否则等于把待办列表挂在公网上；没配 token 时公网监听直接不启动。
+const MOBILE_DEFAULTS = { enabled: false, port: 6099, token: "" };
 
 let config = {
   webhook: { enabled: false, type: "pushplus", token: "", url: "" },
@@ -74,7 +78,8 @@ let config = {
   clipboard: { ...CLIP_DEFAULTS },
   qq: { ...QQ_DEFAULTS },
   cloud: { ...CLOUD_DEFAULTS },
-  alert: { ...ALERT_DEFAULTS }
+  alert: { ...ALERT_DEFAULTS },
+  mobile: { ...MOBILE_DEFAULTS }
 };
 try {
   const disk = JSON.parse(await readFile(CONFIG_PATH, "utf8"));
@@ -90,9 +95,26 @@ try {
       ...ALERT_DEFAULTS,
       ...(disk.alert || {}),
       smtp: { ...ALERT_SMTP_DEFAULTS, ...(disk.alert?.smtp || {}) }
-    }
+    },
+    mobile: { ...MOBILE_DEFAULTS, ...(disk.mobile || {}) }
   };
 } catch { /* 首次运行 */ }
+
+// 密钥没配就现场生成一个并落盘，省得用户手搓。
+// 用 randomBytes 而不是 Math.random：这个串就是这台服务器的唯一门锁。
+if (!config.mobile.token) {
+  const { randomBytes } = await import("node:crypto");
+  config.mobile.token = randomBytes(18).toString("base64url");
+  try {
+    const disk = await readFile(CONFIG_PATH, "utf8").then(JSON.parse).catch(() => ({}));
+    disk.mobile = { ...(disk.mobile || {}), token: config.mobile.token };
+    await mkdir(DATA, { recursive: true });
+    await writeFile(CONFIG_PATH, JSON.stringify(disk, null, 2), "utf8");
+    log(`手机端密钥已生成，访问链接形如 /m?t=${config.mobile.token}`);
+  } catch (err) {
+    log("手机端密钥生成后写盘失败：", err.message);
+  }
+}
 
 async function saveConfig(next) {
   // llm / webhook 单独合并：密钥类字段传空值时保留原值，
@@ -137,6 +159,28 @@ async function pushQQ({ title, body }) {
   return r;
 }
 
+// QQ 发不出去时的兜底通道。
+// 为什么值得有：小号被风控时一小时掉一次，那段时间提醒全丢，而「准时响」
+// 是这个工具唯一的价值。邮件走独立 SMTP，只要服务器活着就发得出去。
+// 开关是 config.mailFallback，默认关；SMTP 配置复用 alert.smtp 那一套。
+async function pushMail({ title, body }) {
+  if (config.mailFallback !== true) return { ok: false, skipped: true };
+  const smtp = { ...ALERT_SMTP_DEFAULTS, ...(config.alert?.smtp || {}) };
+  if (!smtp.user || !smtp.pass) {
+    log("提醒邮件没发出去：还没填发件邮箱或授权码");
+    return { ok: false, error: "missing config" };
+  }
+  const text = body ? `${title}\n\n${body}` : String(title || "提醒");
+  try {
+    const r = await sendMail(smtp, { subject: `【提醒】${title}`, text });
+    log(`QQ 发不出去，这条提醒改发邮件到 ${r.to}`);
+    return { ok: true, to: r.to };
+  } catch (err) {
+    log("提醒邮件也没发出去：", err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
 // 掉线告警。为什么必须走邮件：小号掉线的时候，QQ 这条路本身已经断了，
 // 用它通知等于没通知。邮件走的是完全独立的 SMTP 连接。
 async function sendAlert(subject, text) {
@@ -170,6 +214,12 @@ async function notify(payload) {
   }
   const q = await pushQQ(payload);
   payload.qq = q.ok ? "ok" : (q.skipped ? "skip" : (q.error || "失败"));
+  // QQ 这条路断了（掉线 / 没启用）就走邮件，别让这条提醒直接人间蒸发。
+  // 只在发失败时补一次，QQ 正常时不会多发邮件。
+  if (!q.ok) {
+    const m = await pushMail(payload);
+    payload.mail = m.ok ? "ok" : (m.skipped ? "skip" : (m.error || "失败"));
+  }
   const w = await webhook(config, payload);
   payload.webhook = w.ok ? "ok" : (w.skipped ? "skip" : (w.error || `HTTP ${w.status}`));
   return payload;
@@ -218,10 +268,47 @@ function readBody(req, limit = 30 * 1024 * 1024) {
   });
 }
 
+// 纯文本 body。给系统分享面板用（QQ/微信长按转发进来的一坨字）。
+// 为什么不走 JSON：群消息里引号、换行、反斜杠太常见，套进 JSON 一定被转义咬到，
+// 而手机端那个 App 做变量替换时不会帮你转义。
+function readRaw(req, limit = 256 * 1024) {
+  return new Promise((res, rej) => {
+    let size = 0;
+    const chunks = [];
+    req.on("data", c => {
+      size += c.length;
+      if (size > limit) { rej(new Error("内容太大了")); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on("end", () => res(Buffer.concat(chunks).toString("utf8")));
+    req.on("error", rej);
+  });
+}
+
 const ANCHOR_LABEL = { start: "开始", end: "结束", due: "截止" };
 const shortTime = iso => iso
   ? new Date(iso).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false, month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })
   : "—";
+
+// 分享回来的确认只有两行 Toast：标题太长、日期重复三遍，都会顶到屏幕外。
+function cleanTitle(s) {
+  const one = String(s || "").replace(/\s+/g, " ").trim().replace(/[,，。;；、!！?？]+$/, "");
+  return one.length > 22 ? one.slice(0, 22) + "…" : one;
+}
+
+// 同一天只写一次日期，后面只给时分；超过三条就说"等 N 次"。
+function briefTimes(list) {
+  const parts = list.map(x => {
+    const d = new Date(x.fireAt);
+    return {
+      day: d.toLocaleDateString("zh-CN", { timeZone: "Asia/Shanghai", month: "numeric", day: "numeric" }),
+      hm: d.toLocaleTimeString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false, hour: "2-digit", minute: "2-digit" }).slice(0, 5)
+    };
+  });
+  if (!parts.length) return "";
+  const shown = parts.slice(0, 3).map((p, i) => (i > 0 && p.day === parts[0].day) ? p.hm : `${p.day} ${p.hm}`);
+  return shown.join("、") + (parts.length > 3 ? ` 等 ${parts.length} 次` : "");
+}
 
 function ruleOf(parsed) {
   const rules = ruleBook.rules || [];
@@ -2211,6 +2298,12 @@ async function handleOneBot(ev, headers, query) {
 
   if (ev?.post_type !== "message") return;
 
+  // 只服务私聊的部署（config.qq.privateOnly）：群消息进来直接丢掉，连解析都不做。
+  // 为什么做成硬开关，而不是只靠 groupMode=silent —— silent 只是「不主动说话」，
+  // 事件照样被解析、拉群成员名片、写群上下文，等于还在碰群。
+  // 2026-11-07 13:36 群里连发两条，30 秒后就被踢，群聊是风控最敏感的场景之一。
+  if (config.qq?.privateOnly === true && ev.message_type === "group") return;
+
   if (ev.message_type === "group") return handleGroupMessage(cfg, ev);
 
   if (ev.message_type !== "private") {
@@ -2382,7 +2475,13 @@ function stateSnapshot() {
   };
 }
 
-const server = http.createServer(async (req, res) => {
+const server = http.createServer(handleRequest);
+
+// 手机端：同一套处理逻辑，但只放行白名单路由，并且每个请求都要密钥。
+// 单独开一个监听是为了不影响本机 3790 —— 那边是给自己电脑用的，不该要 token。
+const MOBILE_ALLOW = new Set(["/m", "/todo.apk", "/api/state", "/api/add", "/api/share", "/api/photo", "/api/parse", "/api/calendar.ics"]);
+
+async function handleRequest(req, res) {
   const url = new URL(req.url, "http://127.0.0.1");
   const path = url.pathname;
   try {
@@ -2391,6 +2490,50 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, html, "text/html; charset=utf-8");
     }
     if (path === "/favicon.ico") { res.writeHead(204); return res.end(); }
+
+    // 手机页。没有独立数据，全靠 JS 调下面的接口，所以这里只发文件。
+    if (req.method === "GET" && path === "/m") {
+      const html = await readFile(join(ROOT, "public", "m.html"), "utf8");
+      return send(res, 200, html, "text/html; charset=utf-8");
+    }
+
+    // 手机装 App 用。跟手机页放同一个地址：手机上点一下就能下，
+    // 不用再往微信/网盘里倒一遍。
+    if (req.method === "GET" && path === "/todo.apk") {
+      try {
+        const buf = await readFile(join(ROOT, "public", "todo.apk"));
+        res.writeHead(200, {
+          "Content-Type": "application/vnd.android.package-archive",
+          "Content-Length": buf.length,
+          "Content-Disposition": 'attachment; filename="todo.apk"',
+          "Cache-Control": "no-cache"
+        });
+        return res.end(buf);
+      } catch {
+        return send(res, 404, "还没打包 APK", "text/plain; charset=utf-8");
+      }
+    }
+
+    // 手机上标记完成 / 删除。放这里而不是复用桌面接口，是因为公网侧只放行白名单，
+    // 多开一个口子就多一份风险。
+    if (req.method === "POST" && (path === "/api/mobile/done" || path === "/api/mobile/drop")) {
+      const { id } = await readBody(req);
+      const task = store.tasks.find(t => t.id === id);
+      if (!task) return send(res, 404, { error: "找不到这条了" });
+      if (path.endsWith("/drop")) {
+        store.dropTask(id);
+        store.reminders = store.reminders.filter(r => r.taskId !== id);
+      } else {
+        task.done = true;
+        task.doneAt = Date.now();
+        for (const r of store.reminders) {
+          if (r.taskId === id && r.status === "pending") r.status = "muted";
+        }
+      }
+      await store.flush();
+      log(`手机端${path.endsWith("/drop") ? "删除" : "完成"}了任务：`, task.title);
+      return send(res, 200, { ok: true });
+    }
 
     if (req.method === "GET" && path === "/api/calendar.ics") {
       const url = new URL(req.url, "http://127.0.0.1");
@@ -2473,6 +2616,59 @@ const server = http.createServer(async (req, res) => {
       const { parsed, engine } = await analyze(text);
       const r = await commitTask({ text, parsed, engine, source });
       return send(res, 200, { ...r, engine });
+    }
+
+    // 系统分享面板进来的文本（QQ/微信里长按一条消息 → 分享 → 选「待办」）。
+    // 返回**纯文本**两行，手机那边直接 Toast 弹出来，所以别塞 JSON、别塞表情。
+    // 分享来的往往是一整段群通知，原样交给 analyze，规则不认就让模型读。
+    if (req.method === "POST" && path === "/api/share") {
+      const raw = (await readRaw(req)).trim();
+      if (!raw) return send(res, 400, "内容是空的", "text/plain; charset=utf-8");
+      const text = raw.slice(0, 2000);
+      markPageSeen(text);
+      const { parsed, engine } = await analyze(text);
+      const r = await commitTask({ text, parsed, engine, source: "分享" });
+      const title = cleanTitle(r.task?.title || text);
+      const when = (store.remindersOf(r.task.id) || [])
+        .filter(x => x.status === "pending")
+        .sort((a, b) => new Date(a.fireAt) - new Date(b.fireAt));
+      const body = when.length
+        ? `记下了：${title}\n会提醒：${briefTimes(when)}`
+        : `记下了：${title}\n（没识别到时间，不会提醒）`;
+      return send(res, 200, body, "text/plain; charset=utf-8");
+    }
+
+    // 手机拍照直接落库。跟 /api/ocr 的差别只有一点：识完就存，不再让用户核对一遍。
+    // 手机上一张图往往就是一条通知，拍完还得点「保存」纯属折腾；
+    // 万一认歪了，列表里一眼能看见，删掉比多点一次便宜。
+    if (req.method === "POST" && path === "/api/photo") {
+      const { dataUrl } = await readBody(req);
+      const m = /^data:(image\/[a-z0-9+.-]+);base64,(.+)$/i.exec(String(dataUrl || ""));
+      if (!m) return send(res, 400, { ok: false, error: "不是有效的图片数据" });
+      const mime = m[1].toLowerCase();
+      const b64 = m[2].replace(/\s+/g, "");
+      const bytes = Buffer.from(b64, "base64");
+      if (!bytes.length) return send(res, 200, { ok: false, error: "图片是空的" });
+      if (bytes.length > 12 * 1024 * 1024) {
+        return send(res, 200, { ok: false, error: "图片太大了（上限 12 MB），只截通知那一块再试" });
+      }
+
+      const r = await readImage(b64, mime);
+      if (!r.ok) return send(res, 200, { ok: false, error: r.error });
+      const text = String(r.text || "").trim();
+      if (!text) return send(res, 200, { ok: false, error: "图里没读出字，换个角度或把通知放大再拍" });
+      markPageSeen(text);
+
+      // 模型直接读懂了就不用再解析一遍；退回 OCR 的路径才补一次文本分析
+      let parsed = r.parsed;
+      let engine = "model";
+      if (!parsed) {
+        const a = await analyze(text);
+        parsed = a.parsed;
+        engine = a.engine === "model" ? "model" : "ocr";
+      }
+      const done = await commitTask({ text, parsed, engine, source: "拍照" });
+      return send(res, 200, { ok: true, engine, text, ...done });
     }
 
     // 图片入口。默认让模型直接看（小字、卡片、表格都比 OCR 准）；
@@ -2634,9 +2830,48 @@ const server = http.createServer(async (req, res) => {
     send(res, 404, { error: "没有这个接口" });
   } catch (err) {
     log("错误：", err.message);
-    send(res, 500, { error: err.message });
+    if (!res.headersSent) send(res, 500, { error: err.message });
   }
-});
+}
+
+// 公网监听的守卫。顺序很重要：先看令牌，再看路不路由 ——
+// 反过来的话，攻击者能靠 404 和 401 的差异摸出哪些接口存在。
+function guardMobile(req, res) {
+  const url = new URL(req.url, "http://127.0.0.1");
+  const given = String(url.searchParams.get("t") || req.headers["x-todo-token"] || "");
+  const want = String(config.mobile?.token || "");
+  if (!want) { send(res, 403, { error: "手机端没启用" }); return false; }
+
+  // 页面本身不含密钥（密钥存在浏览器 localStorage 里），所以允许直接打开 /m。
+  // 这样"加到主屏幕"后点图标就行，不用每次都带一长串 t=。
+  // 真正需要防的是下面的 API，校验照旧。
+  if (req.method === "GET" && (url.pathname === "/m" || url.pathname === "/m/")) return true;
+  // 安装包同理：它不含数据，只是拿来装的
+  if (req.method === "GET" && url.pathname === "/todo.apk") return true;
+
+  // 定长比较，别让响应时间泄露前缀匹配了多少位
+  const a = Buffer.from(given), b = Buffer.from(want);
+  const same = a.length === b.length && a.length > 0
+    && (() => { let d = 0; for (let i = 0; i < a.length; i++) d |= a[i] ^ b[i]; return d === 0; })();
+
+  if (!same) {
+    if (hits.size > 400) hits.clear();
+    const ip = req.socket.remoteAddress || "?";
+    hits.set(ip, (hits.get(ip) || 0) + 1);
+    if (hits.get(ip) > 20) { res.writeHead(429); return res.end("too many"); }
+    send(res, 401, { error: "链接无效" });
+    return false;
+  }
+  return true;
+}
+const hits = new Map();
+
+// 手机端还要限制路由白名单：即使密钥有效，也不该能改配置、读日志、动规则文件。
+function allowMobile(path) {
+  return MOBILE_ALLOW.has(path)
+    || path === "/api/mobile/done"
+    || path === "/api/mobile/drop";
+}
 
 // 打开浏览器只在有桌面的 Windows 上有意义。云服务器上没有图形界面，
 // spawn 一个不存在的 xdg-open 会抛 ENOENT 把进程带走，所以这里按平台分流。
@@ -2686,6 +2921,22 @@ server.listen(PORT, "127.0.0.1", () => {
     log(`QQ 事件订阅（WS）：${wsUrl}`);
   }
   if (!process.env.TODO_NO_OPEN) openBrowser(url);
+
+  // 公网监听：手机端入口。默认关，配了 mobile.enabled 才开。
+  // 开了就必须有 token（上面已保证非空），否则等于把待办挂在公网上。
+  if (config.mobile?.enabled === true) {
+    const mport = Number(process.env.TODO_MOBILE_PORT || config.mobile.port || 6099);
+    const mobileServer = http.createServer((req, res) => {
+      const p = new URL(req.url, "http://127.0.0.1").pathname;
+      if (!guardMobile(req, res)) return;
+      if (!allowMobile(p)) return send(res, 404, { error: "没有这个接口" });
+      handleRequest(req, res);
+    });
+    mobileServer.on("error", err => log(`手机端监听 ${mport} 失败：`, err.message));
+    mobileServer.listen(mport, "0.0.0.0", () => {
+      log(`手机端已开：${mport} 端口　/m?t=${config.mobile.token}`);
+    });
+  }
 
   // NapCat 常常比我们起得晚（开机后要等登录），隔一会儿多试几次，把停机期间漏的消息补回来。
   // 20 分钟都没成功说明 NapCat 没起来，等它起来后由下面的看门狗接手。
