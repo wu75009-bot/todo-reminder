@@ -56,6 +56,34 @@ export class Store {
     this.reminders = this.reminders.filter(r => r.taskId !== taskId);
   }
 
+  // 手机上误点「删掉」的代价太高：整条任务连着提醒一起消失，日志里只剩一个标题，
+  // 想捞回来只能手工重建。所以手机端不走 dropTask，改成打个删除标记 ——
+  // 任务和提醒都还在库里，只是不再出现在列表里、提醒全部静音，随时能捡回来。
+  trashTask(taskId) {
+    const t = this.tasks.find(x => x.id === taskId);
+    if (!t) return null;
+    t.deletedAt = Date.now();
+    for (const r of this.reminders) {
+      if (r.taskId === taskId && r.status === "pending") r.status = "muted";
+    }
+    return t;
+  }
+
+  restoreTask(taskId) {
+    const t = this.tasks.find(x => x.id === taskId);
+    if (!t || !t.deletedAt) return null;
+    delete t.deletedAt;
+    const now = Date.now();
+    let back = 0;
+    for (const r of this.reminders) {
+      if (r.taskId !== taskId || r.status !== "muted") continue;
+      // 只点亮还没到点的那些。已经过去的时间点捞回来也没意义，
+      // 反而会在下一次 flush 后突然补发一堆过期提醒。
+      if (Date.parse(r.fireAt) > now) { r.status = "pending"; back++; }
+    }
+    return { task: t, back };
+  }
+
   markReminder(id, status, extra = {}) {
     const r = this.reminders.find(x => x.id === id);
     if (!r) return null;

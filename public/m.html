@@ -180,6 +180,14 @@
   .task .actions .done { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); }
   .task .actions .del { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
 
+  /* 删除前的那一步。删掉是不可逆的（虽然 8 秒内还能撤销），
+     手指滑一下点到就会少一条，所以先把原来的三个按钮换成这句问话。 */
+  .task .actions.confirm { gap: 8px; }
+  .task .actions.confirm button { flex: 1; }
+  .task .actions .cancel { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+  .task .actions .really { background: var(--danger); color: #fff; flex: 1.3; }
+  .task .confirm-tip { font-size: 12px; color: var(--muted); margin-top: 8px; }
+
   /* 过期的不删，但压下去：留着是为了「我是不是忘了什么」这种自查 */
   .task.expired { opacity: .52; }
   .task.expired .t { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--muted) 60%, transparent); }
@@ -324,8 +332,16 @@
     max-width: 86vw; text-align: center; z-index: 99;
   }
   .toast.show { opacity: .96; transform: translate(-50%, 0); }
+  /* 带「撤销」的提示要能点，所以这一种放开 pointer-events */
+  .toast.has-act { pointer-events: auto; display: flex; align-items: center; gap: 12px; }
+  .toast .tact {
+    background: transparent; color: #7fb0ff; font-size: 14px; font-weight: 600;
+    padding: 0; min-height: 0; border: 0; white-space: nowrap;
+  }
+  .toast .tact:active { opacity: .6; }
   @media (prefers-color-scheme: dark) {
     .toast { background: #3a3d45; }
+    .toast .tact { color: #9cc4ff; }
   }
 
   .locked { padding: 60px 20px; text-align: center; color: var(--muted); }
@@ -447,12 +463,28 @@
     history.replaceState(null, "", location.pathname);
   }
 
-  function toast(msg) {
+  function toast(msg, opt) {
     const el = $("toast");
-    el.textContent = msg;
+    if (opt && opt.label) {
+      // 带按钮的提示（撤销）。用真实按钮而不是给整条提示绑 click，
+      // 否则以后有人把提示改成两行文字，点空白处也会触发撤销。
+      el.innerHTML = "<span>" + esc(msg) + "</span>"
+        + '<button class="tact" id="toastAct">' + esc(opt.label) + "</button>";
+      el.classList.add("has-act");
+      $("toastAct").addEventListener("click", () => {
+        el.classList.remove("show");
+        if (opt.fn) opt.fn();
+      });
+    } else {
+      el.textContent = msg;
+      el.classList.remove("has-act");
+    }
     el.classList.add("show");
     clearTimeout(toast._t);
-    toast._t = setTimeout(() => el.classList.remove("show"), 2200);
+    toast._t = setTimeout(() => {
+      el.classList.remove("show");
+      el.classList.remove("has-act");
+    }, (opt && opt.ms) || 2200);
   }
 
   async function api(path, opts = {}) {
@@ -661,16 +693,24 @@
     const meta = Number.isFinite(a)
       ? "<div class=\"meta\">" + (t.start ? "" : "截止 ") + timeLabel(a) + "</div>"
       : "";
+    const actions = confirmDrop === t.id
+      ? '<div class="actions confirm">'
+      +   '<button class="cancel" data-act="cancel-drop">取消</button>'
+      +   '<button class="really" data-act="drop-now">删掉，不再提醒</button>'
+      + "</div>"
+      + '<div class="confirm-tip">删掉后 8 秒内还能撤销</div>'
+      : '<div class="actions">'
+      +   '<button class="done" data-act="done">完成了</button>'
+      +   '<button class="edit" data-act="edit">改时间</button>'
+      +   '<button class="del" data-act="drop">删掉</button>'
+      + "</div>";
+
     return ''
       + '<div class="task' + (expired ? " expired" : "") + '" data-id="' + t.id + '">'
       +   '<div class="t">' + esc(t.title || "(没写标题)") + "</div>"
       +   meta
       +   (chips ? '<div class="chips">' + chips + "</div>" : "")
-      +   '<div class="actions">'
-      +     '<button class="done" data-act="done">完成了</button>'
-      +     '<button class="edit" data-act="edit">改时间</button>'
-      +     '<button class="del" data-act="drop">删掉</button>'
-      +   "</div>"
+      +   actions
       + "</div>";
   }
 
@@ -802,9 +842,28 @@
   async function act(id, what) {
     try {
       const r = await api("/api/mobile/" + what, { method: "POST", body: JSON.stringify({ id }) });
+
+      if (what === "drop") {
+        confirmDrop = "";
+        clearTimeout(onCardTap._t);
+        await refresh();
+        // 删掉之后给 8 秒反悔时间。服务端只是打了删除标记，
+        // 所以撤销是真的把原来那条（连同提醒）拿回来，不是重建。
+        toast("删掉了", { label: "撤销", ms: 8000, fn: async () => {
+          try {
+            const b = await api("/api/mobile/restore", { method: "POST", body: JSON.stringify({ id }) });
+            await refresh();
+            toast(b.restored ? "找回来了，重新排上 " + b.restored + " 个提醒" : "找回来了");
+          } catch (e) {
+            toast("没恢复上：" + (e.message === "unauthorized" ? "密钥失效了" : e.message));
+          }
+        }});
+        return;
+      }
+
       toast(what === "done" ? "已标记完成，在下面「已完成」里"
         : what === "undo" ? (r.restored ? "恢复了，重新排上 " + r.restored + " 个提醒" : "恢复了")
-        : "已删除");
+        : "好了");
       await refresh();
     } catch (e) {
       if (e.message !== "unauthorized") toast("操作失败：" + e.message);
@@ -816,6 +875,9 @@
   // 所以什么都不动就保存 = 原样保留，原有的固定提醒一个都不会丢。
   let sheetId = "";
   let draft = [];
+  // 正在等确认的那条任务的 id。放在外面而不是塞进 DOM，
+  // 因为 render() 会把整段列表重建一遍，状态留在按钮上会被冲掉。
+  let confirmDrop = "";
   let timeKey = "due";      // 有开始时间就改 start，否则改 due
   let origTimeVal = "";     // 打开面板时的原值，没改就不提交，免得白白重写一遍
 
@@ -979,12 +1041,30 @@
     const btn = e.target.closest("button[data-act]");
     if (!btn) return;
     const id = btn.closest(".task").dataset.id;
-    if (btn.dataset.act === "edit") {
+    const what = btn.dataset.act;
+    if (what === "edit") {
       const t = ((state && state.tasks) || []).find(x => x.id === id);
       if (t) openSheet(t);
       return;
     }
-    act(id, btn.dataset.act);
+    // 「删掉」第一下不删，先把这排按钮换成一句确认。
+    // 8 秒不动就自己退回原样，免得一直挂在那里等着被误点。
+    if (what === "drop") {
+      confirmDrop = id;
+      render();
+      clearTimeout(onCardTap._t);
+      onCardTap._t = setTimeout(() => {
+        if (confirmDrop === id) { confirmDrop = ""; render(); }
+      }, 8000);
+      return;
+    }
+    if (what === "cancel-drop") {
+      confirmDrop = "";
+      clearTimeout(onCardTap._t);
+      render();
+      return;
+    }
+    act(id, what === "drop-now" ? "drop" : what);
   };
   $("tasks").addEventListener("click", onCardTap);
   $("doneBox").addEventListener("click", onCardTap);

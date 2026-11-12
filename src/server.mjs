@@ -2482,7 +2482,7 @@ function stateSnapshot() {
   const now = Date.now();
   return {
     now: new Date(now).toISOString(),
-    tasks: store.tasks.map(t => ({ ...t, reminders: store.remindersOf(t.id) })),
+    tasks: store.tasks.filter(t => !t.deletedAt).map(t => ({ ...t, reminders: store.remindersOf(t.id) })),
     pending: store.reminders.filter(r => r.status === "pending").length,
     inbox: store.inbox.slice(-30).reverse(),
     rules: ruleBook.rules.map(r => ({ file: r.file, name: r.name, priority: r.priority, match: r.match, reminders: r.reminders })),
@@ -2513,7 +2513,7 @@ process.on("unhandledRejection", err => {
 
 // 手机端：同一套处理逻辑，但只放行白名单路由，并且每个请求都要密钥。
 // 单独开一个监听是为了不影响本机 3790 —— 那边是给自己电脑用的，不该要 token。
-const MOBILE_ALLOW = new Set(["/m", "/todo.apk", "/api/state", "/api/add", "/api/share", "/api/photo", "/api/parse", "/api/calendar.ics", "/api/calendar.json", "/api/mobile/undo", "/api/mobile/reminders"]);
+const MOBILE_ALLOW = new Set(["/m", "/todo.apk", "/api/state", "/api/add", "/api/share", "/api/photo", "/api/parse", "/api/calendar.ics", "/api/calendar.json", "/api/mobile/undo", "/api/mobile/restore", "/api/mobile/reminders"]);
 
 async function handleRequest(req, res) {
   const url = new URL(req.url, "http://127.0.0.1");
@@ -2555,8 +2555,9 @@ async function handleRequest(req, res) {
       const task = store.tasks.find(t => t.id === id);
       if (!task) return send(res, 404, { error: "找不到这条了" });
       if (path.endsWith("/drop")) {
-        store.dropTask(id);
-        store.reminders = store.reminders.filter(r => r.taskId !== id);
+        // 进回收站而不是真删。手机上一排按钮，手指滑一下就可能点到「删掉」，
+        // 真删了只剩日志里一个标题，找不回来。
+        store.trashTask(id);
       } else {
         task.done = true;
         task.doneAt = Date.now();
@@ -2565,7 +2566,7 @@ async function handleRequest(req, res) {
         }
       }
       await store.flush();
-      log(`手机端${path.endsWith("/drop") ? "删除" : "完成"}了任务：`, task.title);
+      log(`手机端${path.endsWith("/drop") ? "移入回收站" : "完成"}了任务：`, task.title);
       return send(res, 200, { ok: true });
     }
 
@@ -2586,6 +2587,17 @@ async function handleRequest(req, res) {
       await store.flush();
       log("手机端恢复了任务：", task.title, `（重新排上 ${back} 个提醒）`);
       return send(res, 200, { ok: true, restored: back });
+    }
+
+    // 把刚删掉的任务捞回来（手机上「撤销」，或者事后想起来想找回来）。
+    // 任务一直在库里，只是打了删除标记，所以这里不需要任何重建逻辑。
+    if (req.method === "POST" && path === "/api/mobile/restore") {
+      const { id } = await readBody(req);
+      const back = store.restoreTask(id);
+      if (!back) return send(res, 404, { error: "这条不在回收站里" });
+      await store.flush();
+      log("手机端撤销了删除：", back.task.title, `（重新排上 ${back.back} 个提醒）`);
+      return send(res, 200, { ok: true, restored: back.back, task: back.task });
     }
 
     // 手机上调整提醒时间。发过来的是「我最终想要的那几个时刻」，服务端反推出
